@@ -1,0 +1,13 @@
+DigiOps Cloudways deployment branch
+
+Cloudways settings:
+- Repository: git@github.com:indigiti/DigiOps.git
+- Branch: cloudways
+- Deployment Path: public_html/digiops/
+
+After Pull, open:
+https://stage.digiti.in/digiops/
+
+The bootstrap installer downloads the latest certified digiops-release artifact,
+installs public files into public_html/digiops/ and private runtime files into
+private_html/digiops/. The bootstrap GitHub token is not stored.
