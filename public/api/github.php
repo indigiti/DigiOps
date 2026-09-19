@@ -37,18 +37,166 @@ try {
     if (!$project) JsonResponse::send(['error'=>'PROJECT_NOT_FOUND'],404);
     $repo=$client->repo($project['repo']);
     $branches=$client->branches($project['repo']);
-    $commits=$client->commits($project['repo'],$project['branch'],20);
-    $runs=$client->workflowRuns($project['repo'],$project['branch'],10);
+    $commits=$client->commits($project['repo'],$project['branch'],50);
+    $runs=$client->workflowRuns($project['repo'],$project['branch'],20);
+    $workflowRuns=$runs['workflow_runs']??[];
+
     $latestSha=(string)($commits[0]['sha']??'');
-    $update=$latestSha!=='' && $latestSha!==($project['commit']??'');
-    (new ProjectRegistry())->patchRuntime($projectId,['update'=>$update]);
+    $deployedCommit=(string)($project['commit']??'');
+    if ($deployedCommit==='—') $deployedCommit='';
+
+    $successfulRun=null;
+    foreach ($workflowRuns as $run) {
+        if (($run['status']??'')==='completed' && ($run['conclusion']??'')==='success') {
+            $successfulRun=$run;
+            break;
+        }
+    }
+
+    $candidateArtifact=null;
+    $candidateArtifacts=[];
+    $artifactMatch='none';
+    $wanted=trim((string)($project['artifactName']??'digiops-release')) ?: 'digiops-release';
+    if ($successfulRun) {
+        $artifactPayload=$client->artifacts($project['repo'],(int)($successfulRun['id']??0));
+        $candidateArtifacts=$artifactPayload['artifacts']??[];
+        foreach ($candidateArtifacts as $artifact) {
+            if (($artifact['name']??'')===$wanted && !($artifact['expired']??false)) {
+                $candidateArtifact=$artifact;
+                $artifactMatch='configured-name';
+                break;
+            }
+        }
+        if (!$candidateArtifact) {
+            $activeArtifacts=array_values(array_filter(
+                $candidateArtifacts,
+                fn($a)=>is_array($a) && !($a['expired']??false)
+            ));
+            if (count($activeArtifacts)===1) {
+                $candidateArtifact=$activeArtifacts[0];
+                $artifactMatch='single-artifact-fallback';
+            }
+        }
+    }
+
+    $candidateSha=(string)($successfulRun['head_sha']??'');
+    $deployableReady=$successfulRun!==null && $candidateArtifact!==null && !($candidateArtifact['expired']??false);
+    $deployableUpdate=$deployableReady && $candidateSha!=='' && $candidateSha!==$deployedCommit;
+    $sourceUpdate=$latestSha!=='' && $latestSha!==$deployedCommit;
+    $branchAhead=$candidateSha!=='' && $latestSha!=='' && $candidateSha!==$latestSha;
+
+    $deployedIndex=null;
+    $candidateIndex=null;
+    foreach ($commits as $index=>$commit) {
+        $sha=(string)($commit['sha']??'');
+        if ($deployedIndex===null && $deployedCommit!=='' && $sha===$deployedCommit) $deployedIndex=$index;
+        if ($candidateIndex===null && $candidateSha!=='' && $sha===$candidateSha) $candidateIndex=$index;
+    }
+    $sourceCommitsAhead=is_int($deployedIndex) ? $deployedIndex : null;
+    $deployableCommitsAhead=(is_int($deployedIndex) && is_int($candidateIndex) && $deployedIndex >= $candidateIndex)
+        ? $deployedIndex-$candidateIndex
+        : null;
+
+    $candidateCommit=null;
+    foreach ($commits as $commit) {
+        if (($commit['sha']??'')===$candidateSha) {
+            $candidateCommit=$commit;
+            break;
+        }
+    }
+
+    $candidateReason='ready';
+    if (!$successfulRun) $candidateReason='no-successful-workflow-run';
+    elseif (!$candidateArtifact) $candidateReason='artifact-not-found';
+    elseif ($candidateArtifact['expired']??false) $candidateReason='artifact-expired';
+
+    (new ProjectRegistry())->patchRuntime($projectId,['update'=>$deployableUpdate]);
     JsonResponse::send([
         'ok'=>true,'connected'=>true,
-        'repository'=>['full_name'=>$repo['full_name']??$project['repo'],'private'=>$repo['private']??null,'default_branch'=>$repo['default_branch']??null],
+        'repository'=>[
+            'full_name'=>$repo['full_name']??$project['repo'],
+            'private'=>$repo['private']??null,
+            'default_branch'=>$repo['default_branch']??null,
+            'visibility'=>$repo['visibility']??null,
+            'updatedAt'=>$repo['updated_at']??null,
+        ],
+        'branchHead'=>[
+            'branch'=>$project['branch'],
+            'sha'=>$latestSha,
+            'message'=>$commits[0]['commit']['message']??'',
+            'date'=>$commits[0]['commit']['committer']['date']??null,
+            'author'=>$commits[0]['commit']['author']['name']??null,
+        ],
+        'deployed'=>[
+            'commit'=>$deployedCommit,
+            'release'=>$project['release']??'Not deployed',
+            'lastDeploy'=>$project['lastDeploy']??'Never',
+            'health'=>$project['health']??'pending',
+        ],
+        'candidate'=>[
+            'ready'=>$deployableReady,
+            'reason'=>$candidateReason,
+            'updateAvailable'=>$deployableUpdate,
+            'alreadyDeployed'=>$deployableReady && $candidateSha!=='' && $candidateSha===$deployedCommit,
+            'branchAhead'=>$branchAhead,
+            'sourceCommitsAhead'=>$sourceCommitsAhead,
+            'deployableCommitsAhead'=>$deployableCommitsAhead,
+            'run'=>$successfulRun ? [
+                'id'=>$successfulRun['id']??null,
+                'number'=>$successfulRun['run_number']??null,
+                'attempt'=>$successfulRun['run_attempt']??null,
+                'workflowId'=>$successfulRun['workflow_id']??null,
+                'name'=>$successfulRun['name']??'',
+                'title'=>$successfulRun['display_title']??'',
+                'event'=>$successfulRun['event']??'',
+                'status'=>$successfulRun['status']??'',
+                'conclusion'=>$successfulRun['conclusion']??null,
+                'sha'=>$candidateSha,
+                'branch'=>$successfulRun['head_branch']??$project['branch'],
+                'createdAt'=>$successfulRun['created_at']??null,
+                'updatedAt'=>$successfulRun['updated_at']??null,
+                'url'=>$successfulRun['html_url']??null,
+            ] : null,
+            'artifact'=>$candidateArtifact ? [
+                'id'=>$candidateArtifact['id']??null,
+                'name'=>$candidateArtifact['name']??'',
+                'sizeBytes'=>$candidateArtifact['size_in_bytes']??null,
+                'createdAt'=>$candidateArtifact['created_at']??null,
+                'updatedAt'=>$candidateArtifact['updated_at']??null,
+                'expiresAt'=>$candidateArtifact['expires_at']??null,
+                'expired'=>$candidateArtifact['expired']??false,
+                'match'=>$artifactMatch,
+            ] : null,
+            'commit'=>[
+                'sha'=>$candidateSha,
+                'message'=>$candidateCommit['commit']['message']??($successfulRun['head_commit']['message']??''),
+                'date'=>$candidateCommit['commit']['committer']['date']??($successfulRun['head_commit']['timestamp']??null),
+                'author'=>$candidateCommit['commit']['author']['name']??($successfulRun['head_commit']['author']['name']??null),
+            ],
+            'artifactCount'=>count($candidateArtifacts),
+        ],
         'branches'=>array_map(fn($b)=>['name'=>$b['name']??'','sha'=>$b['commit']['sha']??''],$branches),
-        'commits'=>array_map(fn($c)=>['sha'=>$c['sha']??'','message'=>$c['commit']['message']??'','date'=>$c['commit']['committer']['date']??null,'author'=>$c['commit']['author']['name']??null],$commits),
-        'runs'=>array_map(fn($r)=>['id'=>$r['id']??null,'name'=>$r['name']??'','status'=>$r['status']??'','conclusion'=>$r['conclusion']??null,'sha'=>$r['head_sha']??'','createdAt'=>$r['created_at']??null],$runs['workflow_runs']??[]),
-        'updateAvailable'=>$update,
+        'commits'=>array_map(fn($c)=>[
+            'sha'=>$c['sha']??'',
+            'message'=>$c['commit']['message']??'',
+            'date'=>$c['commit']['committer']['date']??null,
+            'author'=>$c['commit']['author']['name']??null
+        ],$commits),
+        'runs'=>array_map(fn($r)=>[
+            'id'=>$r['id']??null,
+            'number'=>$r['run_number']??null,
+            'attempt'=>$r['run_attempt']??null,
+            'name'=>$r['name']??'',
+            'title'=>$r['display_title']??'',
+            'event'=>$r['event']??'',
+            'status'=>$r['status']??'',
+            'conclusion'=>$r['conclusion']??null,
+            'sha'=>$r['head_sha']??'',
+            'createdAt'=>$r['created_at']??null,
+            'updatedAt'=>$r['updated_at']??null
+        ],$workflowRuns),
+        'updateAvailable'=>$deployableUpdate,
+        'sourceUpdateAvailable'=>$sourceUpdate,
     ]);
 } catch (Throwable $e) {
     JsonResponse::send(['error'=>$e->getMessage()],400);
