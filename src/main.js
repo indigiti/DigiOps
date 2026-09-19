@@ -105,6 +105,44 @@ function app(){
     get githubConnected(){return !!(this.githubInfo && this.githubInfo.connected===true)},
     get githubNeedsConnection(){return !!(this.githubInfo && this.githubInfo.connected===false)},
     get githubError(){return this.githubInfo && this.githubInfo.error ? this.githubInfo.error : ''},
+    get candidate(){return this.githubInfo && this.githubInfo.candidate ? this.githubInfo.candidate : null},
+    get candidateReady(){return !!(this.candidate && this.candidate.ready)},
+    get candidateReason(){return this.candidate && this.candidate.reason ? this.candidate.reason : 'checking'},
+    get candidateRun(){return this.candidate && this.candidate.run ? this.candidate.run : null},
+    get candidateArtifact(){return this.candidate && this.candidate.artifact ? this.candidate.artifact : null},
+    get candidateCommit(){return this.candidate && this.candidate.commit ? this.candidate.commit : null},
+    get branchHead(){return this.githubInfo && this.githubInfo.branchHead ? this.githubInfo.branchHead : null},
+    get deployedInfo(){return this.githubInfo && this.githubInfo.deployed ? this.githubInfo.deployed : null},
+    get candidateRunNumber(){return this.candidateRun && this.candidateRun.number ? '#'+this.candidateRun.number : '—'},
+    get candidateRunId(){return this.candidateRun && this.candidateRun.id ? String(this.candidateRun.id) : '—'},
+    get candidateArtifactId(){return this.candidateArtifact && this.candidateArtifact.id ? String(this.candidateArtifact.id) : '—'},
+    get candidateArtifactName(){return this.candidateArtifact && this.candidateArtifact.name ? this.candidateArtifact.name : this.selectedArtifactName},
+    get candidateArtifactSize(){return this.candidateArtifact && this.candidateArtifact.sizeBytes ? this.formatBytes(this.candidateArtifact.sizeBytes) : '—'},
+    get candidateArtifactExpires(){return this.candidateArtifact && this.candidateArtifact.expiresAt ? this.candidateArtifact.expiresAt : '—'},
+    get candidateCommitSha(){return this.candidateCommit && this.candidateCommit.sha ? this.candidateCommit.sha : '—'},
+    get candidateCommitShort(){return this.candidateCommitSha==='—'?'—':this.candidateCommitSha.slice(0,12)},
+    get candidateCommitMessage(){return this.candidateCommit && this.candidateCommit.message ? this.candidateCommit.message : '—'},
+    get candidateCommitDate(){return this.candidateCommit && this.candidateCommit.date ? this.candidateCommit.date : '—'},
+    get candidateCommitAuthor(){return this.candidateCommit && this.candidateCommit.author ? this.candidateCommit.author : '—'},
+    get branchHeadShort(){return this.branchHead && this.branchHead.sha ? this.branchHead.sha.slice(0,12) : '—'},
+    get deployedCommitShort(){return this.deployedInfo && this.deployedInfo.commit ? this.deployedInfo.commit.slice(0,12) : (this.selectedCommit && this.selectedCommit!=='—'?this.selectedCommit.slice(0,12):'—')},
+    get deployedRelease(){return this.deployedInfo && this.deployedInfo.release ? this.deployedInfo.release : (this.selected ? this.selected.release : 'Not deployed')},
+    get deployedLastDeploy(){return this.deployedInfo && this.deployedInfo.lastDeploy ? this.deployedInfo.lastDeploy : (this.selected ? this.selected.lastDeploy : 'Never')},
+    get deployableStatusText(){
+      if(!this.githubInfo)return 'Checking GitHub…'
+      if(!this.githubConnected)return 'GitHub not connected'
+      if(!this.candidateReady)return 'No deployable artifact: '+this.candidateReason
+      if(this.candidate.alreadyDeployed)return 'Latest successful artifact is already deployed'
+      if(this.candidate.branchAhead)return 'Deployable build ready; branch HEAD has newer unbuilt or unsuccessful changes'
+      return 'Verified deployment candidate ready'
+    },
+    formatBytes(bytes){
+      const n=Number(bytes)||0
+      if(n<1024)return n+' B'
+      if(n<1048576)return (n/1024).toFixed(1)+' KB'
+      if(n<1073741824)return (n/1048576).toFixed(1)+' MB'
+      return (n/1073741824).toFixed(2)+' GB'
+    },
     get latestWorkflowStatus(){
       if(!this.githubInfo || !Array.isArray(this.githubInfo.runs) || !this.githubInfo.runs.length)return 'None'
       const run=this.githubInfo.runs[0]
@@ -194,10 +232,20 @@ function app(){
         this.error='GitHub connection required. Open Connections and save a GitHub token before deployment.'
         return
       }
-      if(!confirm('Deploy latest successful verified artifact to '+this.selected.url+'?'))return
+      if(!this.candidateReady){
+        this.error='No verified deployment candidate is ready. Run Check update first.'
+        return
+      }
+      const summary='Deploy '+this.candidateRunNumber+' · artifact '+this.candidateArtifactId+' · '+this.candidateCommitShort+' to '+this.selected.url+'?'
+      if(!confirm(summary))return
       this.clearMessages();this.busy=true
       try{
-        const d=await api('./api/deploy.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id})})
+        const d=await api('./api/deploy.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({
+          project:this.selected.id,
+          runId:this.candidateRun ? this.candidateRun.id : 0,
+          artifactId:this.candidateArtifact ? this.candidateArtifact.id : 0,
+          commit:this.candidateCommitSha==='—'?'':this.candidateCommitSha
+        })})
         this.notice='Deployed release '+d.release;await this.loadProjects();await this.loadReleases();await this.checkHealth()
       }catch(e){this.error=e.message}
       finally{this.busy=false;icons()}
@@ -234,6 +282,7 @@ function app(){
     },
     setTab(tab){
       this.projectTab=tab
+      if(tab==='deploy')this.loadGithubInfo()
       if(tab==='releases')this.loadReleases()
       if(tab==='files')this.browse('public','')
       if(tab==='health')this.checkHealth()
@@ -310,7 +359,71 @@ document.querySelector('#app').innerHTML=`
             <div class="panel"><h2 class="font-bold">Deployment configuration</h2><div class="row"><span><b class="block text-sm">Public URL</b><small class="text-slate-500">Browser route</small></span><code x-text="selectedUrl"></code></div><div class="row"><span><b class="block text-sm">Public folder</b><small class="text-slate-500">Release payload only</small></span><code class="text-xs" x-text="selectedPublicPath"></code></div><div class="row"><span><b class="block text-sm">Private folder</b><small class="text-slate-500">Runtime and metadata</small></span><code class="text-xs" x-text="selectedPrivatePath"></code></div><div class="row"><span><b class="block text-sm">Current commit</b></span><code x-text="selectedCommit"></code></div></div>
             <div class="space-y-5"><div class="panel"><h2 class="font-bold">GitHub</h2><p class="muted mt-1" x-show="!githubInfo">Checking…</p><div x-show="githubConnected"><div class="mt-4 flex items-center gap-2 text-sm"><i data-lucide="check-circle-2" class="h-4 w-4 text-emerald-600"></i>Connected</div><div class="mt-4 text-sm"><span class="text-slate-500">Latest workflow</span><b class="mt-1 block" x-text="latestWorkflowStatus"></b></div></div><p x-show="githubError" class="mt-3 text-sm text-rose-600" x-text="githubError"></p></div><div class="panel"><h2 class="font-bold">Update</h2><p class="muted mt-2" x-text="updateMessage"></p></div></div>
           </div>
-          <div x-show="projectTab==='deploy'" class="panel"><div x-show="githubNeedsConnection" class="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"><b>GitHub connection required.</b> Connect a GitHub token before checking workflows or deploying artifacts. <button type="button" @click="go('settings')" class="ml-2 font-semibold underline">Open Connections</button></div><h2 class="text-xl font-bold">Approval deployment</h2><p class="muted mt-2">DigiOps selects the latest successful GitHub Actions run, downloads the configured artifact, validates ZIP paths and entrypoint, snapshots the current release, then publishes the verified payload.</p><div class="mt-5 flex flex-wrap gap-2"><span class="pill">Artifact: <b x-text="selectedArtifactName"></b></span><span class="pill">Retention: <b x-text="selectedRetention"></b></span></div><button @click="deploy()" class="btn btn-primary mt-6" :disabled="busy || !githubConnected"><i data-lucide="rocket" class="h-4 w-4"></i>Deploy latest successful artifact</button></div>
+          <div x-show="projectTab==='deploy'" class="space-y-5">
+            <div x-show="githubNeedsConnection" class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"><b>GitHub connection required.</b> Connect a GitHub token before checking workflows or deploying artifacts. <button type="button" @click="go('settings')" class="ml-2 font-semibold underline">Open Connections</button></div>
+
+            <div class="panel">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div><p class="text-sm font-medium text-blue-600">Deployment Candidate</p><h2 class="mt-1 text-xl font-bold">Exact build identification</h2><p class="muted mt-2">Review the successful workflow, artifact and commit that DigiOps will deploy. These identifiers are passed back to the deploy endpoint to prevent candidate drift.</p></div>
+                <span class="pill" :class="candidateReady?'border-emerald-200 bg-emerald-50 text-emerald-700':'border-amber-200 bg-amber-50 text-amber-700'"><span class="status-dot" :class="candidateReady?'bg-emerald-500':'bg-amber-500'"></span><span x-text="deployableStatusText"></span></span>
+              </div>
+
+              <div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div class="stat-card"><span class="muted">Workflow run</span><div class="mt-2 text-xl font-bold" x-text="candidateRunNumber"></div><code class="mt-1 block text-xs" x-text="candidateRunId"></code></div>
+                <div class="stat-card"><span class="muted">Artifact ID</span><div class="mt-2 text-xl font-bold" x-text="candidateArtifactId"></div><div class="mt-1 truncate text-xs text-slate-500" x-text="candidateArtifactName"></div></div>
+                <div class="stat-card"><span class="muted">Commit</span><code class="mt-2 block text-base font-bold" x-text="candidateCommitShort"></code><div class="mt-1 truncate text-xs text-slate-500" x-text="candidateCommitAuthor"></div></div>
+                <div class="stat-card"><span class="muted">Artifact size</span><div class="mt-2 text-xl font-bold" x-text="candidateArtifactSize"></div><div class="mt-1 text-xs text-slate-500">Keep <span x-text="selectedRetention"></span> releases</div></div>
+              </div>
+
+              <div class="mt-5 grid gap-4 lg:grid-cols-2">
+                <div class="rounded-2xl border border-slate-200 p-4">
+                  <h3 class="font-bold">Latest successful build</h3>
+                  <div class="row"><span class="muted">Workflow</span><b x-text="candidateRun&&candidateRun.name?candidateRun.name:'—'"></b></div>
+                  <div class="row"><span class="muted">Build title</span><b class="max-w-[65%] text-right" x-text="candidateRun&&candidateRun.title?candidateRun.title:'—'"></b></div>
+                  <div class="row"><span class="muted">Branch</span><code x-text="candidateRun&&candidateRun.branch?candidateRun.branch:selectedBranch"></code></div>
+                  <div class="row"><span class="muted">Created</span><span x-text="candidateRun&&candidateRun.createdAt?candidateRun.createdAt:'—'"></span></div>
+                  <div class="row"><span class="muted">Conclusion</span><b x-text="candidateRun&&candidateRun.conclusion?candidateRun.conclusion:'—'"></b></div>
+                  <div class="row"><span class="muted">Attempt</span><span x-text="candidateRun&&candidateRun.attempt?candidateRun.attempt:'—'"></span></div>
+                </div>
+                <div class="rounded-2xl border border-slate-200 p-4">
+                  <h3 class="font-bold">Artifact</h3>
+                  <div class="row"><span class="muted">Configured name</span><code x-text="selectedArtifactName"></code></div>
+                  <div class="row"><span class="muted">Selected name</span><code x-text="candidateArtifactName"></code></div>
+                  <div class="row"><span class="muted">Match rule</span><span x-text="candidateArtifact&&candidateArtifact.match?candidateArtifact.match:'—'"></span></div>
+                  <div class="row"><span class="muted">Created</span><span x-text="candidateArtifact&&candidateArtifact.createdAt?candidateArtifact.createdAt:'—'"></span></div>
+                  <div class="row"><span class="muted">Expires</span><span x-text="candidateArtifactExpires"></span></div>
+                  <div class="row"><span class="muted">Artifacts in run</span><b x-text="candidate&&candidate.artifactCount?candidate.artifactCount:'—'"></b></div>
+                </div>
+              </div>
+
+              <div class="mt-5 rounded-2xl bg-slate-50 p-4">
+                <h3 class="font-bold">Commit details</h3>
+                <div class="mt-3 grid gap-3 md:grid-cols-[160px_1fr] text-sm"><span class="muted">Full SHA</span><code class="break-all" x-text="candidateCommitSha"></code><span class="muted">Message</span><span x-text="candidateCommitMessage"></span><span class="muted">Author</span><span x-text="candidateCommitAuthor"></span><span class="muted">Commit date</span><span x-text="candidateCommitDate"></span></div>
+              </div>
+            </div>
+
+            <div class="grid gap-5 xl:grid-cols-2">
+              <div class="panel">
+                <h3 class="font-bold">Current deployment</h3>
+                <div class="row"><span class="muted">Release</span><code x-text="deployedRelease"></code></div>
+                <div class="row"><span class="muted">Commit</span><code x-text="deployedCommitShort"></code></div>
+                <div class="row"><span class="muted">Last deployed</span><span x-text="deployedLastDeploy"></span></div>
+                <div class="row"><span class="muted">Health</span><b x-text="selected&&selected.health?selected.health:'pending'"></b></div>
+              </div>
+              <div class="panel">
+                <h3 class="font-bold">Update comparison</h3>
+                <div class="row"><span class="muted">Branch HEAD</span><code x-text="branchHeadShort"></code></div>
+                <div class="row"><span class="muted">Deployable commit</span><code x-text="candidateCommitShort"></code></div>
+                <div class="row"><span class="muted">Source commits ahead</span><b x-text="candidate&&candidate.sourceCommitsAhead!==null?candidate.sourceCommitsAhead:'—'"></b></div>
+                <div class="row"><span class="muted">Deployable commits ahead</span><b x-text="candidate&&candidate.deployableCommitsAhead!==null?candidate.deployableCommitsAhead:'—'"></b></div>
+                <div x-show="candidate&&candidate.branchAhead" class="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">Branch HEAD is newer than the latest successful artifact. DigiOps will deploy only the successful candidate shown above.</div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="flex flex-wrap items-center justify-between gap-4"><div><h3 class="font-bold">Approval</h3><p class="muted mt-1">DigiOps will snapshot the current public release, overlay private application code without deleting runtime data, validate the ZIP and publish this exact candidate.</p></div><button @click="deploy()" class="btn btn-primary" :disabled="busy || !githubConnected || !candidateReady"><i data-lucide="rocket" class="h-4 w-4"></i><span x-text="candidateReady?'Deploy '+candidateRunNumber:'No deployable build'"></span></button></div>
+            </div>
+          </div>
           <div x-show="projectTab==='releases'" class="table-wrap"><div class="table-head"><span>Release</span><span>Commit</span><span>Created</span><span>Action</span></div><template x-for="r in releases" :key="r.id"><div class="table-row"><span class="font-medium" x-text="r.id"></span><code x-text="r.commit || 'snapshot'"></code><span x-text="r.createdAt"></span><span><button @click="rollback(r.id)" class="btn py-1.5 text-xs" :disabled="busy">Rollback</button></span></div></template><div x-show="releases.length===0" class="p-6 text-sm text-slate-500">No releases yet.</div></div>
           <div x-show="projectTab==='files'" class="panel"><div class="mb-4 flex gap-2"><button @click="browse('public','')" class="btn">Public</button><button @click="browse('private','')" class="btn">Private</button></div><div class="mb-3 font-mono text-xs text-slate-500" x-text="filePathLabel"></div><div class="divide-y divide-slate-100"><template x-for="f in fileItems" :key="f.name"><div class="flex items-center justify-between py-3 text-sm"><span class="flex items-center gap-2"><i data-lucide="file-text" class="h-4 w-4 text-slate-400"></i><span x-text="f.name"></span></span><span class="text-xs text-slate-400" x-text="f.type==='dir'?'Folder':f.size+' B'"></span></div></template></div></div>
           <div x-show="projectTab==='health'" class="grid gap-4 md:grid-cols-3"><div class="stat-card"><i data-lucide="heart-pulse" class="h-5 w-5 text-emerald-600"></i><h3 class="mt-3 font-bold">HTTP</h3><p class="muted mt-1" x-text="healthHttpText"></p></div><div class="stat-card"><i data-lucide="hard-drive" class="h-5 w-5 text-blue-600"></i><h3 class="mt-3 font-bold">Storage</h3><p class="muted mt-1" x-text="healthStorageText"></p></div><div class="stat-card"><i data-lucide="server" class="h-5 w-5 text-violet-600"></i><h3 class="mt-3 font-bold">Runtime</h3><p class="muted mt-1" x-text="healthRuntimeText"></p></div></div>
