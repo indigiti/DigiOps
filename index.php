@@ -14,6 +14,12 @@ declare(strict_types=1);
 session_name('DIGIOPSBOOTSTRAP');
 session_start();
 
+const DIGIOPS_CERTIFIED_ARTIFACT_ID = 10588662093;
+const DIGIOPS_CERTIFIED_SOURCE_SHA = '3106db6be7423ca431c21b7d3b61713380aa24fc';
+
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+header('Expires: 0');
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: no-referrer');
 header('X-Frame-Options: DENY');
@@ -134,23 +140,26 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         $token = trim((string)($_POST['token'] ?? ''));
         if ($token === '') throw new RuntimeException('GitHub token is required.');
 
-        $json = gh_request('https://api.github.com/repos/indigiti/DigiOps/actions/artifacts?name=digiops-release&per_page=20', $token);
-        $payload = json_decode($json, true);
-        if (!is_array($payload)) throw new RuntimeException('Invalid GitHub artifact response.');
-
-        $artifact = null;
-        foreach (($payload['artifacts'] ?? []) as $candidate) {
-            if (!is_array($candidate) || ($candidate['expired'] ?? true)) continue;
-            $artifact = $candidate;
-            break;
+        $artifactJson = gh_request(
+            'https://api.github.com/repos/indigiti/DigiOps/actions/artifacts/' . DIGIOPS_CERTIFIED_ARTIFACT_ID,
+            $token
+        );
+        $artifact = json_decode($artifactJson, true);
+        if (!is_array($artifact) || empty($artifact['id'])) {
+            throw new RuntimeException('Certified DigiOps artifact metadata is unavailable.');
         }
-        if (!$artifact || empty($artifact['id'])) throw new RuntimeException('No active digiops-release artifact found.');
+        if (($artifact['expired'] ?? true) === true) {
+            throw new RuntimeException('Certified DigiOps artifact has expired; publish a fresh certified release.');
+        }
+        if (($artifact['name'] ?? '') !== 'digiops-release') {
+            throw new RuntimeException('Certified artifact name mismatch.');
+        }
 
         $tempBase = $publicDir . '/.digiops-bootstrap-' . bin2hex(random_bytes(5));
         $zipFile = $tempBase . '.zip';
         do_mkdir($tempBase);
         gh_request(
-            'https://api.github.com/repos/indigiti/DigiOps/actions/artifacts/' . (int)$artifact['id'] . '/zip',
+            'https://api.github.com/repos/indigiti/DigiOps/actions/artifacts/' . DIGIOPS_CERTIFIED_ARTIFACT_ID . '/zip',
             $token,
             $zipFile
         );
@@ -176,6 +185,18 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         if (!is_file($releasePrivate . '/app/php/bootstrap.php')) throw new RuntimeException('Artifact private runtime missing.');
 
         do_mkdir($privateRoot, 0750);
+
+        // Remove only previously installed frontend payload. Keep the bootstrap
+        // files from the cloudways branch and preserve all private runtime state.
+        foreach (['assets', '.vite'] as $managedDir) {
+            $managedPath = $publicDir . '/' . $managedDir;
+            if (is_dir($managedPath)) remove_tree($managedPath);
+        }
+        foreach (['index.html', 'manifest.webmanifest', 'sw.js', 'favicon.ico'] as $managedFile) {
+            $managedPath = $publicDir . '/' . $managedFile;
+            if (is_file($managedPath)) @unlink($managedPath);
+        }
+
         copy_tree($releasePrivate, $privateRoot);
         copy_tree($releasePublic, $publicDir);
 
@@ -183,7 +204,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             $privateRoot . '/bootstrap-install.json',
             json_encode([
                 'installedAt' => date(DATE_ATOM),
-                'artifactId' => (int)$artifact['id'],
+                'artifactId' => DIGIOPS_CERTIFIED_ARTIFACT_ID,
+                'sourceSha' => DIGIOPS_CERTIFIED_SOURCE_SHA,
                 'artifactCreatedAt' => $artifact['created_at'] ?? null,
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL,
             LOCK_EX
@@ -191,8 +213,18 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
 
         remove_tree($tempBase);
         @unlink($zipFile);
-        $success = 'DigiOps runtime installed successfully. Reloading…';
-        header('Refresh: 2; url=./');
+        file_put_contents(
+            $publicDir . '/.digiops-installed',
+            json_encode([
+                'artifactId'=>DIGIOPS_CERTIFIED_ARTIFACT_ID,
+                'sourceSha'=>DIGIOPS_CERTIFIED_SOURCE_SHA,
+                'installedAt'=>date(DATE_ATOM)
+            ], JSON_UNESCAPED_SLASHES) . PHP_EOL,
+            LOCK_EX
+        );
+
+        $success = 'DigiOps certified runtime installed successfully. Reloading…';
+        header('Refresh: 2; url=./?release=' . DIGIOPS_CERTIFIED_ARTIFACT_ID);
     } catch (Throwable $e) {
         $error = $e->getMessage();
     }
@@ -212,7 +244,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
 <body>
 <div class="card">
   <div class="brand"><div class="logo">DO</div><div><strong>DigiOps</strong><div class="muted">Cloudways bootstrap installer</div></div></div>
-  <p class="muted">This one-time installer downloads the latest certified <strong>digiops-release</strong> artifact from the private GitHub repository and places the public and private runtime files in the correct Cloudways folders.</p>
+  <p class="muted">This installer downloads the pinned certified <strong>digiops-release</strong> artifact and places the public and private runtime files in the correct Cloudways folders.</p>
+  <div class="path">Certified artifact: <?=DIGIOPS_CERTIFIED_ARTIFACT_ID?><br>Source: <?=htmlspecialchars(substr(DIGIOPS_CERTIFIED_SOURCE_SHA,0,12), ENT_QUOTES, 'UTF-8')?></div>
   <?php if ($error): ?><div class="notice error"><?=htmlspecialchars($error, ENT_QUOTES, 'UTF-8')?></div><?php endif; ?>
   <?php if ($success): ?><div class="notice success"><?=htmlspecialchars($success, ENT_QUOTES, 'UTF-8')?></div><?php endif; ?>
   <?php if (!$success): ?>
