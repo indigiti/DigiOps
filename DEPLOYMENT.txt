@@ -5,8 +5,13 @@ Cloudways settings:
 - Branch: cloudways
 - Deployment Path: public_html/digiops/
 
-After Pull, open:
-https://stage.digiti.in/digiops/
+Certified source:
+- main commit: 3106db6be7423ca431c21b7d3b61713380aa24fc
+- artifact: digiops-release
+- artifact id: 10588662093
+
+After Cloudways Pull, open:
+https://stage.digiti.in/digiops/?bootstrap=1
 
 The bootstrap installer downloads the latest certified digiops-release artifact,
 installs public files into public_html/digiops/ and private runtime files into
