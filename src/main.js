@@ -28,7 +28,8 @@ function app(){
     ready:false, installed:false, user:null, csrf:null, authMode:'login',
     sidebarOpen:false, page:'dashboard', projectTab:'overview', query:'', filter:'all',
     projects:[], selectedId:null, releases:[], githubInfo:null, fileListing:null, health:null, audit:[],
-    modal:null, busy:false, notice:'', error:'',
+    modal:null, busy:false, notice:'', error:'', operationTimer:null,
+    operation:{active:false,type:'',title:'',message:'',percent:0,status:'idle',estimated:false},
     login:{username:'',password:'',totp:''},
     install:{name:'Administrator',username:'admin',password:'',confirm:'',totpSecret:''},
     github:{token:'',testRepo:'indigiti/DigiOps'},
@@ -136,12 +137,74 @@ function app(){
       if(this.candidate.branchAhead)return 'Deployable build ready; branch HEAD has newer unbuilt or unsuccessful changes'
       return 'Verified deployment candidate ready'
     },
+    get checkingUpdate(){return this.operation.active && this.operation.type==='update'},
+    get deploying(){return this.operation.active && this.operation.type==='deploy'},
+    get rollingBack(){return this.operation.active && this.operation.type==='rollback'},
+    get checkingHealth(){return this.operation.active && this.operation.type==='health'},
+    get operationWidth(){return 'width:'+Math.max(0,Math.min(100,Number(this.operation.percent)||0))+'%'},
+    get operationPercentLabel(){return Math.round(Number(this.operation.percent)||0)+'%'},
+    get operationTone(){return this.operation.status==='error'?'operation-error':this.operation.status==='success'?'operation-success':'operation-running'},
+    get operationStatusLabel(){return this.operation.status==='error'?'Failed':this.operation.status==='success'?'Completed':this.operation.estimated?'Estimated progress':'In progress'},
+    get noticeTone(){return /attention|warning|needs/i.test(this.notice)?'notice-warning':'notice-success'},
     formatBytes(bytes){
       const n=Number(bytes)||0
       if(n<1024)return n+' B'
       if(n<1048576)return (n/1024).toFixed(1)+' KB'
       if(n<1073741824)return (n/1048576).toFixed(1)+' MB'
       return (n/1073741824).toFixed(2)+' GB'
+    },
+    formatDate(value){
+      if(!value)return '—'
+      const d=new Date(value)
+      if(Number.isNaN(d.getTime()))return String(value)
+      return new Intl.DateTimeFormat('en-IN',{dateStyle:'medium',timeStyle:'short'}).format(d)
+    },
+    releaseCommitShort(r){
+      const value=r && r.commit ? String(r.commit) : ''
+      return value && value!=='snapshot' ? value.slice(0,12) : 'snapshot'
+    },
+    releaseType(r){
+      if(r && r.type)return String(r.type)
+      return r && String(r.id||'').startsWith('pre-') ? 'snapshot' : 'release'
+    },
+    releaseCreated(r){return this.formatDate(r && r.createdAt ? r.createdAt : '')},
+    releaseSize(r){return this.formatBytes(r && r.size ? r.size : 0)},
+    isCurrentRelease(r){return !!(r && this.selected && String(r.id||'')===String(this.selected.release||''))},
+    startOperation(type,title,message,percent=5,estimated=false){
+      this.stopOperationTimer()
+      this.operation={active:true,type,title,message,percent,status:'running',estimated}
+    },
+    setOperation(percent,message){
+      this.operation.percent=Math.max(Number(this.operation.percent)||0,Number(percent)||0)
+      if(message)this.operation.message=message
+    },
+    runEstimatedStages(stages,interval=1500){
+      let index=0
+      this.operation.estimated=true
+      this.operationTimer=setInterval(()=>{
+        if(!this.operation.active || this.operation.status!=='running'){this.stopOperationTimer();return}
+        if(index>=stages.length){this.stopOperationTimer();return}
+        const stage=stages[index++]
+        this.setOperation(stage.percent,stage.message)
+      },interval)
+    },
+    stopOperationTimer(){
+      if(this.operationTimer){clearInterval(this.operationTimer);this.operationTimer=null}
+    },
+    completeOperation(message){
+      this.stopOperationTimer()
+      this.operation.percent=100
+      this.operation.message=message||'Completed.'
+      this.operation.status='success'
+      this.operation.estimated=false
+      setTimeout(()=>{if(this.operation.status==='success')this.operation.active=false},1200)
+    },
+    failOperation(message){
+      this.stopOperationTimer()
+      this.operation.message=message||'Operation failed.'
+      this.operation.status='error'
+      this.operation.estimated=false
+      setTimeout(()=>{if(this.operation.status==='error')this.operation.active=false},2800)
     },
     get latestWorkflowStatus(){
       if(!this.githubInfo || !Array.isArray(this.githubInfo.runs) || !this.githubInfo.runs.length)return 'None'
@@ -214,11 +277,35 @@ function app(){
       }catch(e){this.error=e.message}
       finally{this.busy=false;icons()}
     },
-    async loadGithubInfo(){
+    async checkUpdate(){
       if(!this.selected)return
-      try{this.githubInfo=await api('./api/github.php?project='+encodeURIComponent(this.selected.id));await this.loadProjects()}
-      catch(e){this.githubInfo={error:e.message}}
-      icons()
+      this.clearMessages();this.busy=true
+      this.startOperation('update','Checking for updates','Connecting to GitHub and reading branch state…',12,false)
+      try{
+        this.setOperation(28,'Reading workflow runs and artifacts…')
+        const ok=await this.loadGithubInfo()
+        if(!ok)throw new Error(this.githubError||'UPDATE_CHECK_FAILED')
+        this.setOperation(82,'Comparing deployed commit with the latest successful artifact…')
+        await this.loadProjects()
+        this.setOperation(96,'Refreshing deployment candidate details…')
+        this.notice=this.githubInfo && this.githubInfo.updateAvailable ? 'Update available and deployment candidate refreshed.' : 'Application is already on the latest deployable build.'
+        this.completeOperation('Update check complete.')
+      }catch(e){
+        this.error=e.message;this.failOperation('Update check failed: '+e.message)
+      }finally{this.busy=false;icons()}
+    },
+    async loadGithubInfo(){
+      if(!this.selected)return false
+      try{
+        this.githubInfo=await api('./api/github.php?project='+encodeURIComponent(this.selected.id))
+        await this.loadProjects()
+        icons()
+        return true
+      }catch(e){
+        this.githubInfo={error:e.message}
+        icons()
+        return false
+      }
     },
     async loadReleases(){
       if(!this.selected)return
@@ -239,6 +326,16 @@ function app(){
       const summary='Deploy '+this.candidateRunNumber+' · artifact '+this.candidateArtifactId+' · '+this.candidateCommitShort+' to '+this.selected.url+'?'
       if(!confirm(summary))return
       this.clearMessages();this.busy=true
+      this.startOperation('deploy','Deploying '+this.selectedName,'Preparing verified deployment candidate…',6,true)
+      this.runEstimatedStages([
+        {percent:14,message:'Locking deployment target…'},
+        {percent:28,message:'Downloading the selected GitHub artifact…'},
+        {percent:44,message:'Validating ZIP paths, payload and entrypoint…'},
+        {percent:60,message:'Creating a pre-deploy snapshot…'},
+        {percent:74,message:'Publishing the public release…'},
+        {percent:84,message:'Overlaying private application code while preserving runtime data…'},
+        {percent:91,message:'Updating release metadata and retention…'}
+      ],1400)
       try{
         const d=await api('./api/deploy.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({
           project:this.selected.id,
@@ -246,25 +343,62 @@ function app(){
           artifactId:this.candidateArtifact ? this.candidateArtifact.id : 0,
           commit:this.candidateCommitSha==='—'?'':this.candidateCommitSha
         })})
-        this.notice='Deployed release '+d.release;await this.loadProjects();await this.loadReleases();await this.checkHealth()
-      }catch(e){this.error=e.message}
-      finally{this.busy=false;icons()}
+        this.setOperation(94,'Deployment published. Refreshing application registry…')
+        await this.loadProjects()
+        this.setOperation(97,'Refreshing release history…')
+        await this.loadReleases()
+        this.setOperation(99,'Running post-deploy health check…')
+        await this.checkHealth(true)
+        this.notice='Deployed release '+d.release
+        this.completeOperation('Deployment complete and health check finished.')
+      }catch(e){
+        this.error=e.message;this.failOperation('Deployment failed: '+e.message)
+      }finally{this.busy=false;icons()}
     },
     async rollback(release){
       if(!confirm('Rollback '+this.selected.name+' to '+release+'?'))return
       this.clearMessages();this.busy=true
+      this.startOperation('rollback','Rolling back '+this.selectedName,'Preparing rollback snapshot…',10,true)
+      this.runEstimatedStages([
+        {percent:30,message:'Loading selected release…'},
+        {percent:55,message:'Restoring public application files…'},
+        {percent:72,message:'Overlaying private application code…'},
+        {percent:88,message:'Refreshing release metadata…'}
+      ],1200)
       try{
         await api('./api/rollback.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id,release})})
-        this.notice='Rollback complete.';await this.loadProjects();await this.loadReleases();await this.checkHealth()
-      }catch(e){this.error=e.message}
-      finally{this.busy=false;icons()}
+        this.setOperation(94,'Rollback published. Refreshing state…')
+        await this.loadProjects();await this.loadReleases()
+        this.setOperation(98,'Running health check…')
+        await this.checkHealth(true)
+        this.notice='Rollback complete.'
+        this.completeOperation('Rollback complete and health check finished.')
+      }catch(e){
+        this.error=e.message;this.failOperation('Rollback failed: '+e.message)
+      }finally{this.busy=false;icons()}
     },
-    async checkHealth(){
-      if(!this.selected)return
-      this.clearMessages();this.busy=true
-      try{this.health=await api('./api/health.php?project='+encodeURIComponent(this.selected.id));await this.loadProjects();this.notice=this.health.ok?'Health check passed.':'Health check needs attention.'}
-      catch(e){this.error=e.message}
-      finally{this.busy=false;icons()}
+    async checkHealth(silent=false){
+      if(!this.selected)return false
+      if(!silent){
+        this.clearMessages();this.busy=true
+        this.startOperation('health','Running health check','Checking HTTP, storage and runtime status…',20,false)
+      }
+      try{
+        this.health=await api('./api/health.php?project='+encodeURIComponent(this.selected.id))
+        if(!silent)this.setOperation(78,'Refreshing application health state…')
+        await this.loadProjects()
+        if(!silent){
+          this.notice=this.health.ok?'Health check passed.':'Health check needs attention.'
+          this.completeOperation(this.health.ok?'Health check passed.':'Health check completed with attention required.')
+        }
+        return !!this.health.ok
+      }catch(e){
+        if(!silent){this.error=e.message;this.failOperation('Health check failed: '+e.message)}
+        return false
+      }finally{
+        if(!silent)this.busy=false
+        icons()
+      }
     },
     async browse(scope='public',path=''){
       if(!this.selected)return
@@ -332,8 +466,19 @@ document.querySelector('#app').innerHTML=`
       <header class="topbar"><div class="flex min-w-0 flex-1 items-center gap-3"><button @click="sidebarOpen=true" class="icon-btn lg:hidden"><i data-lucide="menu"></i></button><label class="search-field"><i data-lucide="search" class="h-4 w-4 text-slate-400"></i><input x-model="query" placeholder="Search applications, repositories, paths…"></label></div><span class="ml-3 hidden items-center gap-2 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 sm:inline-flex"><span class="h-2 w-2 rounded-full bg-emerald-500"></span>Secure session</span></header>
 
       <div class="px-4 py-6 md:px-7">
-        <div x-show="notice" class="mb-4 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700" x-text="notice"></div>
+        <div x-show="notice" class="mb-4 rounded-xl px-4 py-3 text-sm font-medium" :class="noticeTone" x-text="notice"></div>
         <div x-show="error" class="mb-4 rounded-xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700" x-text="error"></div>
+        <div x-show="operation.active" class="operation-card" :class="operationTone">
+          <div class="flex items-start gap-3">
+            <span class="operation-icon"><i data-lucide="refresh-cw" class="h-4 w-4 animate-spin"></i></span>
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center justify-between gap-2"><b x-text="operation.title"></b><span class="text-xs font-bold" x-text="operationPercentLabel"></span></div>
+              <p class="mt-1 text-sm text-slate-600" x-text="operation.message"></p>
+              <div class="operation-track mt-3"><div class="operation-bar" :style="operationWidth"></div></div>
+              <div class="mt-2 flex items-center justify-between gap-3 text-[11px] font-medium text-slate-500"><span x-text="operationStatusLabel"></span><span x-show="operation.estimated">Server completion is authoritative; percentage is phase-based.</span></div>
+            </div>
+          </div>
+        </div>
 
         <section x-show="page==='dashboard'">
           <div class="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p class="text-sm font-medium text-blue-600">Operations overview</p><h1 class="mt-1 text-2xl font-bold">Dashboard</h1><p class="muted mt-1">One control plane for staged applications.</p></div><button @click="openCreate()" class="btn btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>Add application</button></div>
@@ -353,7 +498,7 @@ document.querySelector('#app').innerHTML=`
         </section>
 
         <section x-show="page==='project' && selected">
-          <div class="mb-5 flex flex-wrap items-center gap-3"><button @click="go('projects')" class="icon-btn"><i data-lucide="arrow-left"></i></button><div><h1 class="text-xl font-bold" x-text="selectedName"></h1><p class="text-sm text-slate-500" x-text="selectedRepo"></p></div><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="selectedBranch"></span></span><div class="ml-auto flex gap-2"><button @click="loadGithubInfo()" class="btn" :disabled="busy"><i data-lucide="refresh-cw" class="h-4 w-4"></i>Check update</button><button x-show="githubNeedsConnection" @click="go('settings')" class="btn"><i data-lucide="github" class="h-4 w-4"></i>Connect GitHub</button><button @click="deploy()" class="btn btn-primary" :disabled="busy || !githubConnected"><i data-lucide="rocket" class="h-4 w-4"></i>Deploy</button></div></div>
+          <div class="mb-5 flex flex-wrap items-center gap-3"><button @click="go('projects')" class="icon-btn"><i data-lucide="arrow-left"></i></button><div><h1 class="text-xl font-bold" x-text="selectedName"></h1><p class="text-sm text-slate-500" x-text="selectedRepo"></p></div><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="selectedBranch"></span></span><div class="ml-auto flex gap-2"><button @click="checkUpdate()" class="btn" :disabled="busy"><i data-lucide="refresh-cw" class="h-4 w-4" :class="checkingUpdate?'animate-spin':''"></i><span x-text="checkingUpdate?'Checking…':'Check update'"></span></button><button x-show="githubNeedsConnection" @click="go('settings')" class="btn"><i data-lucide="github" class="h-4 w-4"></i>Connect GitHub</button><button @click="deploy()" class="btn btn-primary" :disabled="busy || !githubConnected"><i data-lucide="rocket" class="h-4 w-4"></i><span x-text="deploying?'Deploying…':'Deploy'"></span></button></div></div>
           <div class="mb-5 flex gap-6 overflow-x-auto border-b border-slate-200"><template x-for="t in ['overview','deploy','releases','files','health','settings']"><button @click="setTab(t)" class="tab capitalize" :class="projectTab===t?'active':''" x-text="t"></button></template></div>
           <div x-show="projectTab==='overview'" class="grid gap-5 xl:grid-cols-[1.4fr_.8fr]">
             <div class="panel"><h2 class="font-bold">Deployment configuration</h2><div class="row"><span><b class="block text-sm">Public URL</b><small class="text-slate-500">Browser route</small></span><code x-text="selectedUrl"></code></div><div class="row"><span><b class="block text-sm">Public folder</b><small class="text-slate-500">Release payload only</small></span><code class="text-xs" x-text="selectedPublicPath"></code></div><div class="row"><span><b class="block text-sm">Private folder</b><small class="text-slate-500">Runtime and metadata</small></span><code class="text-xs" x-text="selectedPrivatePath"></code></div><div class="row"><span><b class="block text-sm">Current commit</b></span><code x-text="selectedCommit"></code></div></div>
@@ -424,7 +569,20 @@ document.querySelector('#app').innerHTML=`
               <div class="flex flex-wrap items-center justify-between gap-4"><div><h3 class="font-bold">Approval</h3><p class="muted mt-1">DigiOps will snapshot the current public release, overlay private application code without deleting runtime data, validate the ZIP and publish this exact candidate.</p></div><button @click="deploy()" class="btn btn-primary" :disabled="busy || !githubConnected || !candidateReady"><i data-lucide="rocket" class="h-4 w-4"></i><span x-text="candidateReady?'Deploy '+candidateRunNumber:'No deployable build'"></span></button></div>
             </div>
           </div>
-          <div x-show="projectTab==='releases'" class="table-wrap"><div class="table-head"><span>Release</span><span>Commit</span><span>Created</span><span>Action</span></div><template x-for="r in releases" :key="r.id"><div class="table-row"><span class="font-medium" x-text="r.id"></span><code x-text="r.commit || 'snapshot'"></code><span x-text="r.createdAt"></span><span><button @click="rollback(r.id)" class="btn py-1.5 text-xs" :disabled="busy">Rollback</button></span></div></template><div x-show="releases.length===0" class="p-6 text-sm text-slate-500">No releases yet.</div></div>
+          <div x-show="projectTab==='releases'" class="table-wrap releases-table">
+            <div class="release-head"><span>Release</span><span>Type</span><span>Commit</span><span>Created</span><span>Size</span><span>Action</span></div>
+            <template x-for="r in releases" :key="r.id">
+              <div class="release-row" :class="isCurrentRelease(r)?'release-current':''">
+                <div class="min-w-0"><div class="flex items-center gap-2"><span class="truncate font-semibold" x-text="r.id" :title="r.id"></span><span x-show="isCurrentRelease(r)" class="pill border-emerald-200 bg-emerald-50 text-emerald-700">Current</span></div></div>
+                <div><span class="pill capitalize" x-text="releaseType(r)"></span></div>
+                <code class="truncate text-xs" x-text="releaseCommitShort(r)" :title="r.commit || 'snapshot'"></code>
+                <span class="text-sm text-slate-600" x-text="releaseCreated(r)"></span>
+                <span class="text-sm font-medium text-slate-600" x-text="releaseSize(r)"></span>
+                <div><button @click="rollback(r.id)" class="btn py-1.5 text-xs" :disabled="busy || isCurrentRelease(r)"><span x-text="isCurrentRelease(r)?'Current':'Rollback'"></span></button></div>
+              </div>
+            </template>
+            <div x-show="releases.length===0" class="p-6 text-sm text-slate-500">No releases yet.</div>
+          </div>
           <div x-show="projectTab==='files'" class="panel"><div class="mb-4 flex gap-2"><button @click="browse('public','')" class="btn">Public</button><button @click="browse('private','')" class="btn">Private</button></div><div class="mb-3 font-mono text-xs text-slate-500" x-text="filePathLabel"></div><div class="divide-y divide-slate-100"><template x-for="f in fileItems" :key="f.name"><div class="flex items-center justify-between py-3 text-sm"><span class="flex items-center gap-2"><i data-lucide="file-text" class="h-4 w-4 text-slate-400"></i><span x-text="f.name"></span></span><span class="text-xs text-slate-400" x-text="f.type==='dir'?'Folder':f.size+' B'"></span></div></template></div></div>
           <div x-show="projectTab==='health'" class="grid gap-4 md:grid-cols-3"><div class="stat-card"><i data-lucide="heart-pulse" class="h-5 w-5 text-emerald-600"></i><h3 class="mt-3 font-bold">HTTP</h3><p class="muted mt-1" x-text="healthHttpText"></p></div><div class="stat-card"><i data-lucide="hard-drive" class="h-5 w-5 text-blue-600"></i><h3 class="mt-3 font-bold">Storage</h3><p class="muted mt-1" x-text="healthStorageText"></p></div><div class="stat-card"><i data-lucide="server" class="h-5 w-5 text-violet-600"></i><h3 class="mt-3 font-bold">Runtime</h3><p class="muted mt-1" x-text="healthRuntimeText"></p></div></div>
           <div x-show="projectTab==='settings'" class="panel"><h2 class="font-bold">Application settings</h2><div class="mt-5 grid gap-4 md:grid-cols-2"><div><span class="muted">Repository</span><b class="mt-1 block" x-text="selectedRepo"></b></div><div><span class="muted">Branch</span><b class="mt-1 block" x-text="selectedBranch"></b></div><div><span class="muted">Artifact</span><b class="mt-1 block" x-text="selectedArtifactName"></b></div><div><span class="muted">Health path</span><b class="mt-1 block" x-text="selectedHealthPath"></b></div></div></div>
