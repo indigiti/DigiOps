@@ -90,6 +90,46 @@ function app(){
       })
     },
     get selected(){return this.projects.find(p=>p.id===this.selectedId)||null},
+    get userName(){return this.user && this.user.name ? this.user.name : ''},
+    get userRole(){return this.user && this.user.role ? this.user.role : ''},
+    get selectedName(){return this.selected ? this.selected.name : ''},
+    get selectedRepo(){return this.selected ? this.selected.repo : ''},
+    get selectedBranch(){return this.selected ? this.selected.branch : ''},
+    get selectedUrl(){return this.selected ? this.selected.url : ''},
+    get selectedPublicPath(){return this.selected ? this.selected.publicPath : ''},
+    get selectedPrivatePath(){return this.selected ? this.selected.privatePath : ''},
+    get selectedCommit(){return this.selected ? this.selected.commit : ''},
+    get selectedArtifactName(){return this.selected ? this.selected.artifactName : ''},
+    get selectedRetention(){return this.selected ? this.selected.retention : ''},
+    get selectedHealthPath(){return this.selected ? this.selected.healthPath : ''},
+    get githubConnected(){return !!(this.githubInfo && this.githubInfo.connected===true)},
+    get githubNeedsConnection(){return !!(this.githubInfo && this.githubInfo.connected===false)},
+    get githubError(){return this.githubInfo && this.githubInfo.error ? this.githubInfo.error : ''},
+    get latestWorkflowStatus(){
+      if(!this.githubInfo || !Array.isArray(this.githubInfo.runs) || !this.githubInfo.runs.length)return 'None'
+      const run=this.githubInfo.runs[0]
+      return run.conclusion || run.status || 'None'
+    },
+    get updateMessage(){
+      if(!this.githubInfo)return 'Checking…'
+      if(this.githubNeedsConnection)return 'Connect GitHub to check repository updates.'
+      return this.githubInfo.updateAvailable ? 'New commit available.' : 'No newer commit detected.'
+    },
+    get filePathLabel(){
+      if(!this.fileListing)return ''
+      return (this.fileListing.scope||'') + ':/' + (this.fileListing.path||'')
+    },
+    get fileItems(){return this.fileListing && Array.isArray(this.fileListing.items) ? this.fileListing.items : []},
+    get healthHttpText(){
+      return this.health && this.health.http && this.health.http.status ? 'HTTP '+this.health.http.status+' · '+this.health.http.ms+'ms' : 'Not checked'
+    },
+    get healthStorageText(){
+      return this.health && this.health.storage && this.health.storage.exists ? this.health.storage.bytes+' bytes' : 'Not deployed'
+    },
+    get healthRuntimeText(){
+      return this.health && this.health.runtime && this.health.runtime.php ? 'PHP '+this.health.runtime.php : 'Not checked'
+    },
+    auditHashPrefix(a){return a && a.hash ? String(a.hash).slice(0,12) : ''},
     go(page){this.page=page;this.sidebarOpen=false;this.clearMessages();if(page==='audit')this.loadAudit();icons()},
     async openProject(id){
       this.selectedId=id;this.page='project';this.projectTab='overview';this.githubInfo=null;this.releases=[];this.fileListing=null;this.health=null;this.sidebarOpen=false;icons()
@@ -149,6 +189,11 @@ function app(){
     },
     async deploy(){
       if(!this.selected)return
+      if(!this.githubInfo) await this.loadGithubInfo()
+      if(!this.githubConnected){
+        this.error='GitHub connection required. Open Connections and save a GitHub token before deployment.'
+        return
+      }
       if(!confirm('Deploy latest successful verified artifact to '+this.selected.url+'?'))return
       this.clearMessages();this.busy=true
       try{
@@ -229,9 +274,9 @@ document.querySelector('#app').innerHTML=`
       <div class="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Workspace</div>
       <button @click="go('dashboard')" class="side-link" :class="page==='dashboard'?'active':''"><i data-lucide="layout-dashboard"></i>Dashboard</button>
       <button @click="go('projects')" class="side-link" :class="['projects','project'].includes(page)?'active':''"><i data-lucide="folder-git-2"></i>Applications<span class="ml-auto rounded-full bg-slate-200 px-2 text-[11px]" x-text="projects.length"></span></button>
-      <button @click="go('audit')" class="side-link" :class="page==='audit'?'active':''" x-show="user?.role==='admin'"><i data-lucide="file-clock"></i>Audit Log</button>
+      <button @click="go('audit')" class="side-link" :class="page==='audit'?'active':''" x-show="userRole==='admin'"><i data-lucide="file-clock"></i>Audit Log</button>
       <button @click="go('settings')" class="side-link" :class="page==='settings'?'active':''"><i data-lucide="settings-2"></i>Connections</button>
-      <div class="mt-auto rounded-2xl border border-slate-200 bg-white p-3"><div class="flex items-center gap-3"><span class="grid h-9 w-9 place-items-center rounded-full bg-blue-50 text-blue-700"><i data-lucide="user-round" class="h-4 w-4"></i></span><div class="min-w-0 flex-1"><b class="block truncate text-sm" x-text="user?.name"></b><small class="block truncate text-slate-500" x-text="user?.role"></small></div><button @click="logout()" class="icon-btn h-8 w-8 border-0 shadow-none" title="Logout"><i data-lucide="log-out" class="h-4 w-4"></i></button></div></div>
+      <div class="mt-auto rounded-2xl border border-slate-200 bg-white p-3"><div class="flex items-center gap-3"><span class="grid h-9 w-9 place-items-center rounded-full bg-blue-50 text-blue-700"><i data-lucide="user-round" class="h-4 w-4"></i></span><div class="min-w-0 flex-1"><b class="block truncate text-sm" x-text="userName"></b><small class="block truncate text-slate-500" x-text="userRole"></small></div><button @click="logout()" class="icon-btn h-8 w-8 border-0 shadow-none" title="Logout"><i data-lucide="log-out" class="h-4 w-4"></i></button></div></div>
     </aside>
 
     <main class="min-w-0 flex-1">
@@ -259,17 +304,17 @@ document.querySelector('#app').innerHTML=`
         </section>
 
         <section x-show="page==='project' && selected">
-          <div class="mb-5 flex flex-wrap items-center gap-3"><button @click="go('projects')" class="icon-btn"><i data-lucide="arrow-left"></i></button><div><h1 class="text-xl font-bold" x-text="selected?.name"></h1><p class="text-sm text-slate-500" x-text="selected?.repo"></p></div><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="selected?.branch"></span></span><div class="ml-auto flex gap-2"><button @click="loadGithubInfo()" class="btn" :disabled="busy"><i data-lucide="refresh-cw" class="h-4 w-4"></i>Check update</button><button @click="deploy()" class="btn btn-primary" :disabled="busy"><i data-lucide="rocket" class="h-4 w-4"></i>Deploy</button></div></div>
+          <div class="mb-5 flex flex-wrap items-center gap-3"><button @click="go('projects')" class="icon-btn"><i data-lucide="arrow-left"></i></button><div><h1 class="text-xl font-bold" x-text="selectedName"></h1><p class="text-sm text-slate-500" x-text="selectedRepo"></p></div><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="selectedBranch"></span></span><div class="ml-auto flex gap-2"><button @click="loadGithubInfo()" class="btn" :disabled="busy"><i data-lucide="refresh-cw" class="h-4 w-4"></i>Check update</button><button x-show="githubNeedsConnection" @click="go('settings')" class="btn"><i data-lucide="github" class="h-4 w-4"></i>Connect GitHub</button><button @click="deploy()" class="btn btn-primary" :disabled="busy || !githubConnected"><i data-lucide="rocket" class="h-4 w-4"></i>Deploy</button></div></div>
           <div class="mb-5 flex gap-6 overflow-x-auto border-b border-slate-200"><template x-for="t in ['overview','deploy','releases','files','health','settings']"><button @click="setTab(t)" class="tab capitalize" :class="projectTab===t?'active':''" x-text="t"></button></template></div>
           <div x-show="projectTab==='overview'" class="grid gap-5 xl:grid-cols-[1.4fr_.8fr]">
-            <div class="panel"><h2 class="font-bold">Deployment configuration</h2><div class="row"><span><b class="block text-sm">Public URL</b><small class="text-slate-500">Browser route</small></span><code x-text="selected?.url"></code></div><div class="row"><span><b class="block text-sm">Public folder</b><small class="text-slate-500">Release payload only</small></span><code class="text-xs" x-text="selected?.publicPath"></code></div><div class="row"><span><b class="block text-sm">Private folder</b><small class="text-slate-500">Runtime and metadata</small></span><code class="text-xs" x-text="selected?.privatePath"></code></div><div class="row"><span><b class="block text-sm">Current commit</b></span><code x-text="selected?.commit"></code></div></div>
-            <div class="space-y-5"><div class="panel"><h2 class="font-bold">GitHub</h2><p class="muted mt-1" x-show="!githubInfo">Checking…</p><div x-show="githubInfo?.connected"><div class="mt-4 flex items-center gap-2 text-sm"><i data-lucide="check-circle-2" class="h-4 w-4 text-emerald-600"></i>Connected</div><div class="mt-4 text-sm"><span class="text-slate-500">Latest workflow</span><b class="mt-1 block" x-text="githubInfo?.runs?.[0]?.conclusion || githubInfo?.runs?.[0]?.status || 'None'"></b></div></div><p x-show="githubInfo?.error" class="mt-3 text-sm text-rose-600" x-text="githubInfo?.error"></p></div><div class="panel"><h2 class="font-bold">Update</h2><p class="muted mt-2" x-text="githubInfo?.updateAvailable?'New commit available.':'No newer commit detected.'"></p></div></div>
+            <div class="panel"><h2 class="font-bold">Deployment configuration</h2><div class="row"><span><b class="block text-sm">Public URL</b><small class="text-slate-500">Browser route</small></span><code x-text="selectedUrl"></code></div><div class="row"><span><b class="block text-sm">Public folder</b><small class="text-slate-500">Release payload only</small></span><code class="text-xs" x-text="selectedPublicPath"></code></div><div class="row"><span><b class="block text-sm">Private folder</b><small class="text-slate-500">Runtime and metadata</small></span><code class="text-xs" x-text="selectedPrivatePath"></code></div><div class="row"><span><b class="block text-sm">Current commit</b></span><code x-text="selectedCommit"></code></div></div>
+            <div class="space-y-5"><div class="panel"><h2 class="font-bold">GitHub</h2><p class="muted mt-1" x-show="!githubInfo">Checking…</p><div x-show="githubConnected"><div class="mt-4 flex items-center gap-2 text-sm"><i data-lucide="check-circle-2" class="h-4 w-4 text-emerald-600"></i>Connected</div><div class="mt-4 text-sm"><span class="text-slate-500">Latest workflow</span><b class="mt-1 block" x-text="latestWorkflowStatus"></b></div></div><p x-show="githubError" class="mt-3 text-sm text-rose-600" x-text="githubError"></p></div><div class="panel"><h2 class="font-bold">Update</h2><p class="muted mt-2" x-text="updateMessage"></p></div></div>
           </div>
-          <div x-show="projectTab==='deploy'" class="panel"><h2 class="text-xl font-bold">Approval deployment</h2><p class="muted mt-2">DigiOps selects the latest successful GitHub Actions run, downloads the configured artifact, validates ZIP paths and entrypoint, snapshots the current release, then publishes the verified payload.</p><div class="mt-5 flex flex-wrap gap-2"><span class="pill">Artifact: <b x-text="selected?.artifactName"></b></span><span class="pill">Retention: <b x-text="selected?.retention"></b></span></div><button @click="deploy()" class="btn btn-primary mt-6" :disabled="busy"><i data-lucide="rocket" class="h-4 w-4"></i>Deploy latest successful artifact</button></div>
+          <div x-show="projectTab==='deploy'" class="panel"><div x-show="githubNeedsConnection" class="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"><b>GitHub connection required.</b> Connect a GitHub token before checking workflows or deploying artifacts. <button type="button" @click="go('settings')" class="ml-2 font-semibold underline">Open Connections</button></div><h2 class="text-xl font-bold">Approval deployment</h2><p class="muted mt-2">DigiOps selects the latest successful GitHub Actions run, downloads the configured artifact, validates ZIP paths and entrypoint, snapshots the current release, then publishes the verified payload.</p><div class="mt-5 flex flex-wrap gap-2"><span class="pill">Artifact: <b x-text="selectedArtifactName"></b></span><span class="pill">Retention: <b x-text="selectedRetention"></b></span></div><button @click="deploy()" class="btn btn-primary mt-6" :disabled="busy || !githubConnected"><i data-lucide="rocket" class="h-4 w-4"></i>Deploy latest successful artifact</button></div>
           <div x-show="projectTab==='releases'" class="table-wrap"><div class="table-head"><span>Release</span><span>Commit</span><span>Created</span><span>Action</span></div><template x-for="r in releases" :key="r.id"><div class="table-row"><span class="font-medium" x-text="r.id"></span><code x-text="r.commit || 'snapshot'"></code><span x-text="r.createdAt"></span><span><button @click="rollback(r.id)" class="btn py-1.5 text-xs" :disabled="busy">Rollback</button></span></div></template><div x-show="releases.length===0" class="p-6 text-sm text-slate-500">No releases yet.</div></div>
-          <div x-show="projectTab==='files'" class="panel"><div class="mb-4 flex gap-2"><button @click="browse('public','')" class="btn">Public</button><button @click="browse('private','')" class="btn">Private</button></div><div class="mb-3 font-mono text-xs text-slate-500" x-text="fileListing?.scope + ':/' + (fileListing?.path||'')"></div><div class="divide-y divide-slate-100"><template x-for="f in fileListing?.items || []" :key="f.name"><div class="flex items-center justify-between py-3 text-sm"><span class="flex items-center gap-2"><i data-lucide="file-text" class="h-4 w-4 text-slate-400"></i><span x-text="f.name"></span></span><span class="text-xs text-slate-400" x-text="f.type==='dir'?'Folder':f.size+' B'"></span></div></template></div></div>
-          <div x-show="projectTab==='health'" class="grid gap-4 md:grid-cols-3"><div class="stat-card"><i data-lucide="heart-pulse" class="h-5 w-5 text-emerald-600"></i><h3 class="mt-3 font-bold">HTTP</h3><p class="muted mt-1" x-text="health?.http?.status ? 'HTTP '+health.http.status+' · '+health.http.ms+'ms' : 'Not checked'"></p></div><div class="stat-card"><i data-lucide="hard-drive" class="h-5 w-5 text-blue-600"></i><h3 class="mt-3 font-bold">Storage</h3><p class="muted mt-1" x-text="health?.storage?.exists ? health.storage.bytes+' bytes' : 'Not deployed'"></p></div><div class="stat-card"><i data-lucide="server" class="h-5 w-5 text-violet-600"></i><h3 class="mt-3 font-bold">Runtime</h3><p class="muted mt-1" x-text="health?.runtime?.php ? 'PHP '+health.runtime.php : 'Not checked'"></p></div></div>
-          <div x-show="projectTab==='settings'" class="panel"><h2 class="font-bold">Application settings</h2><div class="mt-5 grid gap-4 md:grid-cols-2"><div><span class="muted">Repository</span><b class="mt-1 block" x-text="selected?.repo"></b></div><div><span class="muted">Branch</span><b class="mt-1 block" x-text="selected?.branch"></b></div><div><span class="muted">Artifact</span><b class="mt-1 block" x-text="selected?.artifactName"></b></div><div><span class="muted">Health path</span><b class="mt-1 block" x-text="selected?.healthPath"></b></div></div></div>
+          <div x-show="projectTab==='files'" class="panel"><div class="mb-4 flex gap-2"><button @click="browse('public','')" class="btn">Public</button><button @click="browse('private','')" class="btn">Private</button></div><div class="mb-3 font-mono text-xs text-slate-500" x-text="filePathLabel"></div><div class="divide-y divide-slate-100"><template x-for="f in fileItems" :key="f.name"><div class="flex items-center justify-between py-3 text-sm"><span class="flex items-center gap-2"><i data-lucide="file-text" class="h-4 w-4 text-slate-400"></i><span x-text="f.name"></span></span><span class="text-xs text-slate-400" x-text="f.type==='dir'?'Folder':f.size+' B'"></span></div></template></div></div>
+          <div x-show="projectTab==='health'" class="grid gap-4 md:grid-cols-3"><div class="stat-card"><i data-lucide="heart-pulse" class="h-5 w-5 text-emerald-600"></i><h3 class="mt-3 font-bold">HTTP</h3><p class="muted mt-1" x-text="healthHttpText"></p></div><div class="stat-card"><i data-lucide="hard-drive" class="h-5 w-5 text-blue-600"></i><h3 class="mt-3 font-bold">Storage</h3><p class="muted mt-1" x-text="healthStorageText"></p></div><div class="stat-card"><i data-lucide="server" class="h-5 w-5 text-violet-600"></i><h3 class="mt-3 font-bold">Runtime</h3><p class="muted mt-1" x-text="healthRuntimeText"></p></div></div>
+          <div x-show="projectTab==='settings'" class="panel"><h2 class="font-bold">Application settings</h2><div class="mt-5 grid gap-4 md:grid-cols-2"><div><span class="muted">Repository</span><b class="mt-1 block" x-text="selectedRepo"></b></div><div><span class="muted">Branch</span><b class="mt-1 block" x-text="selectedBranch"></b></div><div><span class="muted">Artifact</span><b class="mt-1 block" x-text="selectedArtifactName"></b></div><div><span class="muted">Health path</span><b class="mt-1 block" x-text="selectedHealthPath"></b></div></div></div>
         </section>
 
         <section x-show="page==='settings'">
@@ -277,7 +322,7 @@ document.querySelector('#app').innerHTML=`
         </section>
 
         <section x-show="page==='audit'">
-          <div class="panel"><div class="mb-4 flex justify-between"><div><h1 class="text-xl font-bold">Audit Log</h1><p class="muted">Hash-chained operational events.</p></div><button @click="loadAudit()" class="btn"><i data-lucide="refresh-cw" class="h-4 w-4"></i>Refresh</button></div><div class="divide-y divide-slate-100"><template x-for="a in audit" :key="a.hash"><div class="py-3 text-sm"><div class="flex flex-wrap justify-between gap-2"><b x-text="a.event"></b><span class="text-xs text-slate-400" x-text="a.time"></span></div><div class="mt-1 text-xs text-slate-500"><span x-text="a.actor"></span> · <code x-text="a.hash?.slice(0,12)"></code></div></div></template></div></div>
+          <div class="panel"><div class="mb-4 flex justify-between"><div><h1 class="text-xl font-bold">Audit Log</h1><p class="muted">Hash-chained operational events.</p></div><button @click="loadAudit()" class="btn"><i data-lucide="refresh-cw" class="h-4 w-4"></i>Refresh</button></div><div class="divide-y divide-slate-100"><template x-for="a in audit" :key="a.hash"><div class="py-3 text-sm"><div class="flex flex-wrap justify-between gap-2"><b x-text="a.event"></b><span class="text-xs text-slate-400" x-text="a.time"></span></div><div class="mt-1 text-xs text-slate-500"><span x-text="a.actor"></span> · <code x-text="auditHashPrefix(a)"></code></div></div></template></div></div>
         </section>
       </div>
     </main>
