@@ -1,19 +1,31 @@
 # DigiOps
 
-Web-first multi-application deployment and operations manager for shared Cloudways applications.
+**DigiOps v1.0.0** is a web-first deployment and operations manager for multiple independent applications hosted beneath one Cloudways application/domain.
 
-Current baseline: **v0.1.0 — Foundation & Admin Shell**
+Example managed routes:
 
-## Core goals
+- `https://stage.digiti.in/sahakarxv/`
+- `https://stage.digiti.in/app1/`
+- `https://stage.digiti.in/app2/`
 
-- Manage independent applications such as `/sahakarxv/`, `/app1/`, and `/app2/` from one browser UI.
-- Keep public releases under `public_html/<app>/`.
-- Keep credentials, manifests, release metadata and private runtime data under `private_html/`.
-- GitHub-first integration with approval-oriented deployments.
-- No SQL/SQLite/Redis requirement.
-- No arbitrary web shell or unrestricted command execution.
-- Release history, audit trail, health checks and rollback-ready architecture.
-- Folder-portable UI built with Vite + Alpine.js + Tailwind CSS.
+## What is built
+
+- first-run browser installer
+- admin authentication, hardened sessions, CSRF and login rate limiting
+- optional TOTP validation
+- encrypted GitHub token vault
+- GitHub repository/branch/commit/workflow intelligence
+- application registry with strict Cloudways path guards
+- GitHub Actions artifact deployment
+- ZIP traversal/symlink checks
+- release snapshots, retention and rollback
+- deployment locks
+- restricted file browser
+- HTTP/runtime/storage health checks
+- hash-chained audit log
+- responsive reference-inspired admin UI
+- no SQL/SQLite/Redis requirement
+- no arbitrary browser shell
 
 ## Development
 
@@ -26,6 +38,16 @@ Production build:
 
 ```bash
 npm run build
+php tools/package-release.php
 ```
 
-See `docs/ARCHITECTURE.md` and `docs/BUILD-STATUS.md`.
+GitHub Actions publishes a `digiops-release` artifact containing:
+
+```text
+release/
+  public/     # deploy to public_html/digiops/
+  private/    # deploy to private_html/digiops/
+  RELEASE.json
+```
+
+See `docs/INSTALL.md`, `docs/ARCHITECTURE.md` and `docs/BUILD-STATUS.md`.

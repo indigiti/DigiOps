@@ -2,86 +2,82 @@
 
 ## Release
 
-**v0.1.0 — Foundation & Admin Shell**
+**v1.0.0 — Production Feature Complete / Runtime Certification Pending**
 
 ## P00 — Product / security baseline
+- [x] Single-domain multi-folder model
+- [x] `public_html/<app>/` + `private_html/<app>/`
+- [x] No database
+- [x] No arbitrary browser shell
+- [x] Approval-oriented artifact deployment
 
-- [x] Product name frozen: DigiOps
-- [x] Single-domain multi-folder deployment model
-- [x] `public_html/<app>/` + `private_html/<app>/` isolation
-- [x] No database baseline
-- [x] No arbitrary web shell
-- [x] Approval-oriented deployment model
-- [x] GitHub artifact-first architecture
-
-## P01 — UI/UX shell
-
-- [x] Responsive reference-inspired admin shell
-- [x] Sidebar navigation
-- [x] Global search surface
+## P01 — UI/UX
+- [x] Reference-inspired admin shell
 - [x] Dashboard
-- [x] Application cards
-- [x] Filters
-- [x] Create-application modal
-- [x] Project-detail header
-- [x] Project-detail tabs
-- [x] Mobile sidebar behavior
+- [x] Application cards/search/filter
+- [x] Create application
+- [x] Project tabs
+- [x] Connection UI
+- [x] Audit UI
+- [x] Installer/login UI
+- [x] Responsive mobile sidebar
 
-## P02 — Registry / path security foundation
+## P02 — Registry / path security
+- [x] File-backed registry
+- [x] Strict slug validation
+- [x] Managed public/private path generation
+- [x] Traversal rejection
 
-- [x] PHP bootstrap
-- [x] File-backed private project registry
-- [x] Public/private path guard
-- [x] Status endpoint
-- [x] Project registry endpoint
-- [x] Flexible dev/Cloudways backend bootstrap resolution
+## P03 — GitHub
+- [x] Encrypted token vault
+- [x] Repository validation
+- [x] Branch list
+- [x] Commit list
+- [x] Workflow runs
+- [x] Update detection
+- [x] Artifact discovery/download
 
-## P03 — GitHub connection
-
-- [ ] GitHub credential vault
-- [ ] Repository connection wizard
-- [ ] Branch/tag/commit browser
-- [ ] GitHub Actions build status
-- [ ] Artifact discovery/download
-- [ ] Commit/update detection
-
-## P04 — Deployment engine
-
-- [ ] Manifest validation
-- [ ] Pre-deploy snapshot
-- [ ] Staged extraction
-- [ ] Atomic publication strategy
-- [ ] Maintenance gate
-- [ ] Deployment lock
-- [ ] Rollback
+## P04 — Deployment
+- [x] Deployment lock
+- [x] ZIP traversal checks
+- [x] Symlink rejection
+- [x] Payload entrypoint validation
+- [x] Pre-deploy snapshot
+- [x] Staged publication
+- [x] Release metadata/hash
+- [x] Retention
+- [x] Rollback
 
 ## P05 — Files / releases
-
-- [ ] Restricted file browser
-- [ ] Upload/download policy
-- [ ] Release registry
-- [ ] Retention policy
-- [ ] Release diff
-- [ ] Restore controls
+- [x] Restricted public/private listing
+- [x] Release history
+- [x] Rollback controls
+- [x] Disk-size reporting
+- [ ] Browser file mutation intentionally excluded from v1.0; deploy artifacts remain source of truth
 
 ## P06 — Health / logs / audit
+- [x] HTTP health probe
+- [x] PHP extension/runtime check
+- [x] Storage check
+- [x] Hash-chained audit events
 
-- [ ] HTTP health probes
-- [ ] PHP/runtime checks
-- [ ] Storage checks
-- [ ] Deployment logs
-- [ ] Audit chain
-- [ ] Error lifecycle
+## P07 — Authentication
+- [x] First-run installer
+- [x] Password hashing
+- [x] Hardened sessions
+- [x] CSRF
+- [x] Login rate limiting
+- [x] Roles
+- [x] Optional TOTP
 
-## P07 — Authentication / permissions
+## P08 — CI / packaging
+- [x] Frontend build
+- [x] PHP lint
+- [x] Security leak check
+- [x] PathGuard test
+- [x] Production release package
+- [x] GitHub Actions artifact
 
-- [ ] Admin authentication
-- [ ] CSRF
-- [ ] TOTP/2FA
-- [ ] Session hardening
-- [ ] Roles/permissions
-- [ ] Optional IP allowlist
+## Remaining certification
 
-## Production note
-
-v0.1.0 is a development foundation, not a production deployment authority yet. Deployment-mutating actions stay non-operational until authentication, credential vault, artifact verification and rollback gates are complete.
+The codebase is feature-complete for v1.0.0. Final production certification requires deploying the generated release package on the actual Cloudways application and testing real filesystem permissions, PHP extensions, HTTPS/session behavior, GitHub token permissions, artifact deployment and rollback against `stage.digiti.in`.

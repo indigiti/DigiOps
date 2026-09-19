@@ -4,6 +4,9 @@ declare(strict_types=1);
 namespace DigiOps\Registry;
 
 use DigiOps\Security\PathGuard;
+use DigiOps\Support\Files;
+use InvalidArgumentException;
+use RuntimeException;
 
 final class ProjectRegistry
 {
@@ -16,40 +19,73 @@ final class ProjectRegistry
 
     public function all(): array
     {
-        if (!is_file($this->file)) {
-            return [];
-        }
-
-        $raw = file_get_contents($this->file);
-        $decoded = json_decode($raw ?: '[]', true);
-        if (!is_array($decoded)) return [];
-
         $items = [];
-        foreach ($decoded as $project) {
+        foreach (Files::readJson($this->file, []) as $project) {
             if (!is_array($project)) continue;
-            try {
-                $slug = PathGuard::slug((string)($project['id'] ?? ''));
-            } catch (\Throwable) {
-                continue;
-            }
-            $items[] = [
-                'id' => $slug,
-                'name' => (string)($project['name'] ?? $slug),
-                'repo' => (string)($project['repo'] ?? ''),
-                'branch' => (string)($project['branch'] ?? 'main'),
-                'url' => '/' . $slug . '/',
-                'publicPath' => PathGuard::publicRelative($slug),
-                'privatePath' => PathGuard::privateRelative($slug),
-                'status' => (string)($project['status'] ?? 'configured'),
-                'health' => (string)($project['health'] ?? 'pending'),
-                'update' => (bool)($project['update'] ?? false),
-                'commit' => (string)($project['commit'] ?? '—'),
-                'release' => (string)($project['release'] ?? 'Not deployed'),
-                'lastDeploy' => (string)($project['lastDeploy'] ?? 'Never'),
-                'stack' => array_values(array_filter((array)($project['stack'] ?? []), 'is_string')),
-                'environment' => (string)($project['environment'] ?? 'Stage'),
-            ];
+            try { $items[] = $this->normalize($project); } catch (\Throwable) {}
         }
         return $items;
+    }
+
+    public function find(string $id): ?array
+    {
+        $id = PathGuard::slug($id);
+        foreach ($this->all() as $project) if ($project['id'] === $id) return $project;
+        return null;
+    }
+
+    public function upsert(array $input): array
+    {
+        $record = $this->normalize($input);
+        if (!preg_match('#^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$#', $record['repo'])) throw new InvalidArgumentException('INVALID_REPOSITORY');
+        if (!preg_match('/^[A-Za-z0-9._\/-]{1,160}$/', $record['branch'])) throw new InvalidArgumentException('INVALID_BRANCH');
+
+        $all = $this->all();
+        $found = false;
+        foreach ($all as $i => $project) {
+            if ($project['id'] === $record['id']) { $all[$i] = array_merge($project, $record); $found = true; break; }
+        }
+        if (!$found) $all[] = $record;
+        Files::writeJson($this->file, $all);
+        return $record;
+    }
+
+    public function delete(string $id): void
+    {
+        $id = PathGuard::slug($id);
+        $all = array_values(array_filter($this->all(), fn(array $p): bool => $p['id'] !== $id));
+        Files::writeJson($this->file, $all);
+    }
+
+    public function patchRuntime(string $id, array $patch): array
+    {
+        $current = $this->find($id);
+        if (!$current) throw new RuntimeException('PROJECT_NOT_FOUND');
+        return $this->upsert(array_merge($current, array_intersect_key($patch, array_flip(['status','health','update','commit','release','lastDeploy','stack','environment']))));
+    }
+
+    private function normalize(array $project): array
+    {
+        $slug = PathGuard::slug((string)($project['id'] ?? $project['slug'] ?? ''));
+        return [
+            'id' => $slug,
+            'name' => trim((string)($project['name'] ?? $slug)) ?: $slug,
+            'repo' => trim((string)($project['repo'] ?? '')),
+            'branch' => trim((string)($project['branch'] ?? 'main')) ?: 'main',
+            'url' => '/' . $slug . '/',
+            'publicPath' => PathGuard::publicRelative($slug),
+            'privatePath' => PathGuard::privateRelative($slug),
+            'status' => (string)($project['status'] ?? 'configured'),
+            'health' => (string)($project['health'] ?? 'pending'),
+            'update' => (bool)($project['update'] ?? false),
+            'commit' => (string)($project['commit'] ?? '—'),
+            'release' => (string)($project['release'] ?? 'Not deployed'),
+            'lastDeploy' => (string)($project['lastDeploy'] ?? 'Never'),
+            'stack' => array_values(array_filter((array)($project['stack'] ?? ['Auto-detect']), 'is_string')),
+            'environment' => (string)($project['environment'] ?? 'Stage'),
+            'artifactName' => trim((string)($project['artifactName'] ?? 'digiops-release')),
+            'healthPath' => trim((string)($project['healthPath'] ?? '/')),
+            'retention' => max(1, min(20, (int)($project['retention'] ?? 5))),
+        ];
     }
 }
