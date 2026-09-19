@@ -52,3 +52,34 @@ button { -webkit-tap-highlight-color: transparent; }
   .table-head { display: none; }
   .table-row { @apply block space-y-2; }
 }
+
+
+@layer components {
+  .notice-success { @apply bg-emerald-50 text-emerald-700; }
+  .notice-warning { @apply bg-amber-50 text-amber-800; }
+
+  .operation-card { @apply mb-4 rounded-2xl border px-4 py-4 shadow-sm; }
+  .operation-running { @apply border-blue-200 bg-blue-50/70; }
+  .operation-success { @apply border-emerald-200 bg-emerald-50/80; }
+  .operation-error { @apply border-rose-200 bg-rose-50/80; }
+  .operation-icon { @apply grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-blue-600 shadow-sm ring-1 ring-slate-200; }
+  .operation-track { @apply h-2.5 overflow-hidden rounded-full bg-white ring-1 ring-slate-200; }
+  .operation-bar { @apply h-full rounded-full bg-blue-600 transition-all duration-500 ease-out; }
+
+  .release-head { @apply grid grid-cols-[minmax(260px,2fr)_110px_150px_minmax(190px,1.3fr)_100px_110px] items-center gap-4 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500; }
+  .release-row { @apply grid grid-cols-[minmax(260px,2fr)_110px_150px_minmax(190px,1.3fr)_100px_110px] items-center gap-4 border-t border-slate-100 px-4 py-3.5 text-sm; }
+  .release-current { @apply bg-emerald-50/50; }
+  .releases-table { @apply overflow-x-auto; }
+  .releases-table .release-head,
+  .releases-table .release-row { min-width: 980px; }
+}
+
+@media (max-width: 760px) {
+  .releases-table { @apply overflow-visible border-0; }
+  .releases-table .release-head { display: none; }
+  .releases-table .release-row {
+    min-width: 0;
+    @apply mb-3 block rounded-2xl border border-slate-200 bg-white p-4 shadow-sm;
+  }
+  .releases-table .release-row > * { @apply mb-2 block last:mb-0; }
+}
