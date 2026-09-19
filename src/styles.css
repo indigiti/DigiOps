@@ -24,7 +24,7 @@ button { -webkit-tap-highlight-color: transparent; }
   .brand-mark { @apply grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-blue-700 via-indigo-600 to-violet-600 text-white shadow-soft; }
   .side-link { @apply flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-white hover:text-slate-950; }
   .side-link.active { @apply bg-white font-semibold text-slate-950 shadow-sm ring-1 ring-slate-200/80; }
-  .side-link svg { @apply h-4.5 w-4.5; }
+  .side-link svg { @apply h-4 w-4; }
   .topbar { @apply sticky top-0 z-30 flex h-[72px] items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur md:px-7; }
   .search-field { @apply flex h-10 w-full max-w-[420px] items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm shadow-sm focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-blue-50; }
   .search-field input { @apply w-full border-0 bg-transparent p-0 outline-none placeholder:text-slate-400; }
