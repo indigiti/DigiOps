@@ -14,8 +14,8 @@ declare(strict_types=1);
 session_name('DIGIOPSBOOTSTRAP');
 session_start();
 
-const DIGIOPS_CERTIFIED_ARTIFACT_ID = 10589493232;
-const DIGIOPS_CERTIFIED_SOURCE_SHA = '7a034c5dcbeaf4269c5839bf0b35b7ffb5bd3baa';
+const DIGIOPS_CERTIFIED_ARTIFACT_ID = 10590607034;
+const DIGIOPS_CERTIFIED_SOURCE_SHA = 'edb1268912d4705336b8c06eea3ff5ec898ac170';
 
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
@@ -89,24 +89,84 @@ function gh_request(string $url, string $token, ?string $output = null): string 
     ];
 
     if ($output !== null) {
+        $location = null;
         $fp = fopen($output, 'wb');
         if (!$fp) throw new RuntimeException('Cannot open artifact target');
         curl_setopt_array($ch, [
             CURLOPT_FILE => $fp,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS => 5,
+            CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT => 120,
+            CURLOPT_TIMEOUT => 45,
             CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_HEADERFUNCTION => static function ($ch, string $header) use (&$location): int {
+                $len = strlen($header);
+                if (stripos($header, 'Location:') === 0) $location = trim(substr($header, 9));
+                return $len;
+            },
         ]);
         $ok = curl_exec($ch);
         $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $errno = curl_errno($ch);
         $err = curl_error($ch);
         curl_close($ch);
         fclose($fp);
-        if (!$ok || $status < 200 || $status >= 300) {
+
+        if ($ok === false) {
             @unlink($output);
-            throw new RuntimeException('GitHub download failed: HTTP ' . $status . ($err ? ' ' . $err : ''));
+            throw new RuntimeException('GitHub artifact API failed: HTTP ' . $status . ' cURL ' . $errno . ($err ? ' ' . $err : ''));
+        }
+
+        if ($status >= 200 && $status < 300) return '';
+
+        if (!in_array($status, [301,302,303,307,308], true) || !$location) {
+            @unlink($output);
+            throw new RuntimeException('GitHub artifact redirect failed: HTTP ' . $status);
+        }
+
+        $parts = parse_url($location);
+        if (
+            !is_array($parts)
+            || strtolower((string)($parts['scheme'] ?? '')) !== 'https'
+            || empty($parts['host'])
+            || isset($parts['user'])
+            || isset($parts['pass'])
+        ) {
+            @unlink($output);
+            throw new RuntimeException('GitHub artifact redirect is invalid.');
+        }
+
+        $fp = fopen($output, 'wb');
+        if (!$fp) throw new RuntimeException('Cannot open artifact target');
+        $blob = curl_init($location);
+        curl_setopt_array($blob, [
+            CURLOPT_FILE => $fp,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 3,
+            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_TIMEOUT => 180,
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/octet-stream',
+                'User-Agent: DigiOps-Cloudways-Bootstrap/1.0',
+            ],
+        ]);
+        $ok = curl_exec($blob);
+        $status = (int)curl_getinfo($blob, CURLINFO_RESPONSE_CODE);
+        $errno = curl_errno($blob);
+        $err = curl_error($blob);
+        curl_close($blob);
+        fclose($fp);
+
+        if ($ok === false || $status < 200 || $status >= 300) {
+            @unlink($output);
+            throw new RuntimeException('GitHub artifact blob failed: HTTP ' . $status . ' cURL ' . $errno . ($err ? ' ' . $err : ''));
+        }
+
+        $fh = fopen($output, 'rb');
+        $magic = $fh ? fread($fh, 4) : false;
+        if ($fh) fclose($fh);
+        if (!is_string($magic) || !in_array($magic, ["PK\x03\x04","PK\x05\x06","PK\x07\x08"], true)) {
+            @unlink($output);
+            throw new RuntimeException('Downloaded artifact is not a ZIP.');
         }
         return '';
     }
