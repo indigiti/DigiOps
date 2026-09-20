@@ -15,6 +15,9 @@ use DigiOps\Targets\TargetService;
 if(($_SERVER['REQUEST_METHOD']??'GET')!=='POST') JsonResponse::send(['error'=>'METHOD_NOT_ALLOWED'],405);
 $user=Session::requireRole(['admin','operator']);
 Session::assertCsrf();
+// Do not hold the PHP session mutex while probing the remote target.
+// This endpoint must be able to run while deploy.php is still executing.
+if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 $data=json_decode(file_get_contents('php://input') ?: '',true);
 if(!is_array($data)) JsonResponse::send(['error'=>'INVALID_JSON'],400);
 $projectId=(string)($data['project']??'');
