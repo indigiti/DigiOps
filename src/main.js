@@ -59,7 +59,7 @@ function app(){
         this.installed=s.installed
         this.user=s.user
         this.csrf=s.csrf
-        if(this.user){await this.loadProjects();await this.loadTargets()}
+        if(this.user){await Promise.all([this.loadProjects(),this.loadTargets(),this.loadRuntimeInfo()])}
       }catch(e){this.error=e.message}
       finally{this.ready=true;icons()}
     },
@@ -109,7 +109,7 @@ function app(){
       try{
         const d=await api('./api/login.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(this.login)})
         this.user=d.user;this.csrf=d.csrf;this.login.password='';this.notice='Signed in.'
-        await this.loadProjects();await this.loadTargets();await this.applyRoute(window.location.pathname,true)
+        await Promise.all([this.loadProjects(),this.loadTargets(),this.loadRuntimeInfo()]);await this.applyRoute(window.location.pathname,true)
       }catch(e){this.error=e.message}
       finally{this.busy=false;icons()}
     },
@@ -184,7 +184,16 @@ function app(){
     get selectedRetention(){return this.selected ? this.selected.retention : ''},
     get selectedHealthPath(){return this.selected ? this.selected.healthPath : ''},
     get selectedTargetId(){return this.selected && this.selected.targetId ? this.selected.targetId : 'local'},
+    get runtimeVersion(){return this.runtimeInfo&&this.runtimeInfo.version?this.runtimeInfo.version:'—'},
+    get runtimeArtifactId(){return this.runtimeInfo&&this.runtimeInfo.artifactId?String(this.runtimeInfo.artifactId):'—'},
+    get runtimeSourceShort(){return this.runtimeInfo&&this.runtimeInfo.sourceSha?String(this.runtimeInfo.sourceSha).slice(0,12):'—'},
+    get runtimeSourceFull(){return this.runtimeInfo&&this.runtimeInfo.sourceSha?String(this.runtimeInfo.sourceSha):''},
     targetName(id){const t=this.targets.find(x=>x.id===id);return t?t.name:id},
+    async copyText(value){
+      if(!value)return
+      try{await navigator.clipboard.writeText(String(value));this.notice='Copied to clipboard.'}
+      catch{this.error='COPY_FAILED'}
+    },
     get githubConnected(){return !!(this.githubInfo && this.githubInfo.connected===true)},
     get githubNeedsConnection(){return !!(this.githubInfo && this.githubInfo.connected===false)},
     get githubError(){return this.githubInfo && this.githubInfo.error ? this.githubInfo.error : ''},
@@ -1021,6 +1030,19 @@ document.querySelector('#app').innerHTML=`
           <div class="panel"><div class="mb-4 flex justify-between"><div><h1 class="text-xl font-bold">Audit Log</h1><p class="muted">Hash-chained operational events.</p></div><button @click="loadAudit()" class="btn"><i data-lucide="refresh-cw" class="h-4 w-4"></i>Refresh</button></div><div class="divide-y divide-slate-100"><template x-for="a in audit" :key="a.hash"><div class="py-3 text-sm"><div class="flex flex-wrap justify-between gap-2"><b x-text="a.event"></b><span class="text-xs text-slate-400" x-text="a.time"></span></div><div class="mt-1 text-xs text-slate-500"><span x-text="a.actor"></span> · <code x-text="auditHashPrefix(a)"></code></div></div></template></div></div>
         </section>
       </div>
+
+      <footer x-show="user" class="mt-8 border-t border-slate-200 px-1 py-5 text-xs text-slate-500">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span><b class="font-semibold text-slate-700">DigiOps</b> <span x-text="'v'+runtimeVersion"></span></span>
+            <span>Artifact <code class="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700" x-text="runtimeArtifactId"></code></span>
+            <button type="button" @click="copyText(runtimeSourceFull)" class="inline-flex items-center gap-1 hover:text-slate-900" :title="runtimeSourceFull||'Source unavailable'">
+              Source <code class="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700" x-text="runtimeSourceShort"></code>
+            </button>
+          </div>
+          <span x-show="runtimeInfo&&runtimeInfo.identityVerified" class="inline-flex items-center gap-1 text-emerald-700"><span class="status-dot bg-emerald-500"></span>Verified build</span>
+        </div>
+      </footer>
     </main>
   </div>
 
