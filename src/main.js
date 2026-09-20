@@ -554,7 +554,7 @@ function app(){
         {percent:60,message:'Creating a pre-deploy snapshot…'},
         {percent:74,message:'Publishing the public release…'},
         {percent:84,message:'Overlaying private application code while preserving runtime data…'},
-        {percent:91,message:'Updating release metadata and retention…'}
+        {percent:91,message:'Waiting for final publish confirmation…'}
       ],1400)
       try{
         const d=await api('./api/deploy.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({
@@ -573,28 +573,40 @@ function app(){
         this.notice='Deployed release '+d.release
         this.completeOperation('Deployment complete and health check finished.')
       }catch(e){
-        // A remote target can finish publishing and updating DigiOps' registry
-        // while the browser/proxy loses the final JSON response. Reconcile the
-        // requested immutable commit before declaring the deployment failed.
+        // Only transport/final-response failures are ambiguous. Concrete deploy
+        // errors must remain failures and must never be hidden by reconciliation.
         const transportError=e.message
-        this.setOperation(94,'Final response was interrupted. Verifying deployed commit…')
-        this.cacheDropProject(this.selected.id)
+        const ambiguous=/INVALID_RESPONSE|TARGET_CONNECT_FAILED|HTTP_50[234]|Failed to fetch|NetworkError/i.test(transportError)
         let reconciled=false
-        try{
-          await this.loadProjects()
-          const refreshed=await this.loadGithubInfo(true)
-          const deployedCommit=this.deployedInfo&&this.deployedInfo.commit?String(this.deployedInfo.commit):''
-          reconciled=!!(refreshed && requestedCommit && deployedCommit===requestedCommit)
+        if(ambiguous && requestedCommit){
+          this.setOperation(94,'Final response was interrupted. Verifying remote deployment…')
+          this.cacheDropProject(this.selected.id)
+          for(let attempt=1;attempt<=5 && !reconciled;attempt++){
+            try{
+              const status=await api('./api/deploy-status.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id,commit:requestedCommit})})
+              if(status && status.state==='deployed'){
+                reconciled=true
+                break
+              }
+            }catch(_){}
+            if(attempt<5){
+              this.setOperation(94,'Publish confirmation pending · verification '+attempt+'/5…')
+              await new Promise(resolve=>setTimeout(resolve,2500))
+            }
+          }
           if(reconciled){
             this.error=''
+            this.cacheDropProject(this.selected.id)
+            await this.loadProjects()
+            await this.loadGithubInfo(true)
             this.setOperation(97,'Exact candidate is deployed. Refreshing release history…')
             await this.loadReleases(true)
             this.setOperation(99,'Running post-deploy health check…')
             await this.checkHealth(true)
             this.notice='Deployment verified after response interruption · '+requestedRun+' · artifact '+requestedArtifact+'.'
-            this.completeOperation('Deployment committed successfully; final response was lost but exact commit verification passed.')
+            this.completeOperation('Deployment committed successfully; exact remote release verification passed.')
           }
-        }catch(_){}
+        }
         if(!reconciled){
           this.error=transportError
           this.failOperation('Deployment failed: '+transportError)
