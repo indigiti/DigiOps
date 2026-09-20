@@ -6,9 +6,9 @@ Cloudways settings:
 - Deployment Path: public_html/digiops/
 
 Certified source:
-- main commit: a06644eeb4ef1cff9e0f41119a68c701286051a9
+- main commit: 12ea1f424978f9b2c38bfcdaaa25341067822c26
 - artifact: digiops-release
-- artifact id: 10608038237
+- artifact id: 10608650474
 
 After Cloudways Pull, open:
 https://stage.digiti.in/digiops/?bootstrap=1
