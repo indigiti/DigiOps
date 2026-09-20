@@ -701,7 +701,9 @@ function app(){
       try{
         const d=await api('./api/infrastructure.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({action:'varnish-save',...this.varnishForm})})
         if(d.varnish)Object.assign(this.varnishForm,d.varnish)
-        this.notice='Varnish policy saved. Apply the shown exclusions in Cloudways.'
+        if(!this.infra)this.infra={}
+        this.infra.varnishPolicyConfigured=true
+        this.notice='Varnish policy saved. Cloudways exclusions remain externally managed until Cloudways API is connected.'
       }catch(e){this.error=e.message}
       finally{this.busy=false;icons()}
     },
@@ -1004,13 +1006,13 @@ document.querySelector('#app').innerHTML=`
           </div>
 
           <div class="panel">
-            <div class="flex flex-wrap items-start justify-between gap-4"><div><p class="text-sm font-medium text-amber-600">Cache policy</p><h2 class="mt-1 text-xl font-bold">Varnish</h2><p class="muted mt-2">DigiOps should bypass Varnish because it is an authenticated control plane. Keep Varnish enabled globally for public sites, but exclude DigiOps.</p></div><span class="pill border-amber-200 bg-amber-50 text-amber-800">Cloudways service control not connected</span></div>
+            <div class="flex flex-wrap items-start justify-between gap-4"><div><p class="text-sm font-medium text-amber-600">Cache policy</p><h2 class="mt-1 text-xl font-bold">Varnish</h2><p class="muted mt-2">DigiOps should bypass Varnish because it is an authenticated control plane. Keep Varnish enabled globally for public sites, but exclude DigiOps.</p></div><div class="flex flex-wrap gap-2"><span class="pill" :class="infra&&infra.varnishPolicyConfigured?'border-emerald-200 bg-emerald-50 text-emerald-700':'border-amber-200 bg-amber-50 text-amber-800'"><span class="status-dot" :class="infra&&infra.varnishPolicyConfigured?'bg-emerald-500':'bg-amber-500'"></span><span x-text="infra&&infra.varnishPolicyConfigured?'Policy saved':'Policy not saved'"></span></span><span class="pill border-slate-200 bg-slate-50 text-slate-600">Cloudways API: Not connected</span></div></div>
             <div class="mt-5 grid gap-4 md:grid-cols-3">
               <label class="text-sm"><span class="mb-1.5 block font-semibold">Bypass path</span><input x-model="varnishForm.bypassPath" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
               <label class="text-sm"><span class="mb-1.5 block font-semibold">Session cookie</span><input x-model="varnishForm.sessionCookie" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
               <label class="text-sm"><span class="mb-1.5 block font-semibold">API path</span><input x-model="varnishForm.apiPath" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
             </div>
-            <div class="mt-4 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900"><b>Recommended Cloudways exclusions</b><div class="mt-2 grid gap-1 font-mono text-xs"><span x-text="'URL: '+varnishForm.bypassPath"></span><span x-text="'URL: '+varnishForm.apiPath"></span><span x-text="'Cookie: '+varnishForm.sessionCookie"></span></div><p class="mt-3 text-xs">After changing exclusions in Cloudways, purge Varnish once. DigiOps cannot toggle the Cloudways Varnish service until a Cloudways API connection is configured.</p></div>
+            <div class="mt-4 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900"><b>Recommended Cloudways exclusions</b><div class="mt-2 grid gap-1 font-mono text-xs"><span x-text="'URL: '+varnishForm.bypassPath"></span><span x-text="'URL: '+varnishForm.apiPath"></span><span x-text="'Cookie: '+varnishForm.sessionCookie"></span></div><p class="mt-3 text-xs">After changing exclusions in Cloudways, purge Varnish once. <b>Policy saved</b> means DigiOps has stored your intended exclusions. <b>Cloudways API: Not connected</b> only means DigiOps cannot directly read or toggle the Cloudways Varnish service yet.</p></div>
             <div class="mt-5 flex gap-2"><button @click="saveVarnishPolicy()" class="btn btn-primary" :disabled="busy||userRole!=='admin'"><i data-lucide="shield-check" class="h-4 w-4"></i>Save policy</button></div>
           </div>
         </section>
