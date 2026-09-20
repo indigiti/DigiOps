@@ -17,32 +17,61 @@ final class GitHubClient
 
     public function repo(string $fullName): array
     {
-        return $this->get('/repos/' . rawurlencode(explode('/', $fullName, 2)[0]) . '/' . rawurlencode(explode('/', $fullName, 2)[1]));
+        try {
+            return $this->get('/repos/' . $this->repoPath($fullName));
+        } catch (RuntimeException $e) {
+            throw $this->contextualize('REPOSITORY', $e);
+        }
     }
 
     public function branches(string $fullName): array
     {
-        return $this->get('/repos/' . $this->repoPath($fullName) . '/branches?per_page=100');
+        try {
+            return $this->get('/repos/' . $this->repoPath($fullName) . '/branches?per_page=100');
+        } catch (RuntimeException $e) {
+            throw $this->contextualize('BRANCHES', $e);
+        }
     }
 
     public function commits(string $fullName, string $branch, int $limit = 20): array
     {
-        return $this->get('/repos/' . $this->repoPath($fullName) . '/commits?sha=' . rawurlencode($branch) . '&per_page=' . max(1,min(100,$limit)));
+        try {
+            return $this->get('/repos/' . $this->repoPath($fullName) . '/commits?sha=' . rawurlencode($branch) . '&per_page=' . max(1,min(100,$limit)));
+        } catch (RuntimeException $e) {
+            throw $this->contextualize('COMMITS', $e);
+        }
     }
 
     public function workflowRuns(string $fullName, string $branch, int $limit = 10): array
     {
-        return $this->get('/repos/' . $this->repoPath($fullName) . '/actions/runs?branch=' . rawurlencode($branch) . '&per_page=' . max(1,min(100,$limit)));
+        try {
+            return $this->get('/repos/' . $this->repoPath($fullName) . '/actions/runs?branch=' . rawurlencode($branch) . '&per_page=' . max(1,min(100,$limit)));
+        } catch (RuntimeException $e) {
+            throw $this->contextualize('ACTIONS', $e);
+        }
     }
 
     public function artifacts(string $fullName, int $runId): array
     {
-        return $this->get('/repos/' . $this->repoPath($fullName) . '/actions/runs/' . $runId . '/artifacts?per_page=100');
+        try {
+            return $this->get('/repos/' . $this->repoPath($fullName) . '/actions/runs/' . $runId . '/artifacts?per_page=100');
+        } catch (RuntimeException $e) {
+            throw $this->contextualize('ARTIFACTS', $e);
+        }
     }
 
     public function downloadArtifact(string $fullName, int $artifactId, string $target): void
     {
         $this->download('/repos/' . $this->repoPath($fullName) . '/actions/artifacts/' . $artifactId . '/zip', $target);
+    }
+
+    private function contextualize(string $stage, RuntimeException $e): RuntimeException
+    {
+        $message = $e->getMessage();
+        if (preg_match('/^GITHUB_HTTP_(\\d{3})(?::.*)?$/', $message, $match)) {
+            return new RuntimeException('GITHUB_' . $stage . '_HTTP_' . $match[1], 0, $e);
+        }
+        return new RuntimeException('GITHUB_' . $stage . '_FAILED', 0, $e);
     }
 
     private function repoPath(string $fullName): string
