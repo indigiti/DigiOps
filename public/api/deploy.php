@@ -9,6 +9,8 @@ use DigiOps\Security\SecretVault;
 use DigiOps\Security\Session;
 use DigiOps\Support\Files;
 use DigiOps\Support\JsonResponse;
+use DigiOps\Targets\TargetService;
+use DigiOps\Targets\RemoteDeploymentDriver;
 
 if ($_SERVER['REQUEST_METHOD']!=='POST') JsonResponse::send(['error'=>'METHOD_NOT_ALLOWED'],405);
 $user=Session::requireRole(['admin','operator']);
@@ -49,7 +51,20 @@ try {
     $zip=DIGIOPS_PRIVATE_ROOT . '/tmp/artifact-' . bin2hex(random_bytes(6)) . '.zip';
     $client->downloadArtifact($project['repo'],$artifactId,$zip);
     try {
-        $result=(new ReleaseManager())->deployArtifact($projectId,$zip,['commit'=>$commit,'artifactId'=>$artifactId],$user);
+        $target=(new TargetService())->forProject($projectId);
+        if (($target['id']??'local')==='local') {
+            $result=(new ReleaseManager())->deployArtifact($projectId,$zip,['commit'=>$commit,'artifactId'=>$artifactId],$user);
+        } else {
+            $result=(new RemoteDeploymentDriver())->deploy($projectId,$zip,$project,['commit'=>$commit,'artifactId'=>$artifactId]);
+            (new ProjectRegistry())->patchRuntime($projectId,[
+                'status'=>'deployed',
+                'health'=>'pending',
+                'commit'=>$commit?:'—',
+                'release'=>(string)($result['release']??'Remote release'),
+                'lastDeploy'=>date(DATE_ATOM),
+                'update'=>false,
+            ]);
+        }
     } finally { @unlink($zip); }
     JsonResponse::send($result);
 } catch (Throwable $e) {
