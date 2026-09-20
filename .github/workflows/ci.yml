@@ -63,6 +63,8 @@ jobs:
         run: find app public tools agent -name '*.php' -print0 | xargs -0 -n1 php -l
       - name: Path guard tests
         run: php tests/php/PathGuardTest.php
+      - name: Deployment candidate resolver tests
+        run: php tests/php/DeploymentCandidateResolverTest.php
 
   security:
     runs-on: ubuntu-latest
