@@ -242,6 +242,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         $releasePublic = $tempBase . '/public';
         $releasePrivate = $tempBase . '/private';
         if (!is_file($releasePublic . '/index.html')) throw new RuntimeException('Artifact public entrypoint missing.');
+        if (!is_file($releasePublic . '/.htaccess')) throw new RuntimeException('Artifact Apache pretty URL rules missing.');
+        $rewrite = (string)file_get_contents($releasePublic . '/.htaccess');
+        foreach (['RewriteEngine On','RewriteBase /digiops/','RewriteRule ^api/ - [L]','RewriteRule ^ index.html [L]'] as $rule) {
+            if (!str_contains($rewrite, $rule)) {
+                throw new RuntimeException('Artifact Apache pretty URL rules invalid.');
+            }
+        }
         if (!is_file($releasePrivate . '/app/php/bootstrap.php')) throw new RuntimeException('Artifact private runtime missing.');
 
         do_mkdir($privateRoot, 0750);
