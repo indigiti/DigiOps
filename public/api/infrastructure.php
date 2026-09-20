@@ -22,6 +22,7 @@ function infraConfig(string $file): array
             'bypassPath'=>'/digiops/',
             'sessionCookie'=>'DIGIOPSSESSID',
             'apiPath'=>'/digiops/api/',
+            'savedAt'=>null,
         ],
     ];
     $saved = Files::readJson($file, []);
@@ -199,6 +200,7 @@ try {
                 'timeout'=>$redis['timeout'],
             ],
             'varnish'=>$infra['varnish'],
+            'varnishPolicyConfigured'=>!empty($infra['varnish']['savedAt']),
             'serviceControl'=>false,
         ]);
     }
@@ -246,6 +248,7 @@ try {
             'bypassPath'=>trim((string)($data['bypassPath'] ?? '/digiops/')),
             'sessionCookie'=>trim((string)($data['sessionCookie'] ?? 'DIGIOPSSESSID')),
             'apiPath'=>trim((string)($data['apiPath'] ?? '/digiops/api/')),
+            'savedAt'=>date(DATE_ATOM),
         ];
         if ($varnish['bypassPath'] === '' || $varnish['bypassPath'][0] !== '/') throw new RuntimeException('VARNISH_BYPASS_PATH_INVALID');
         if ($varnish['apiPath'] === '' || $varnish['apiPath'][0] !== '/') throw new RuntimeException('VARNISH_API_PATH_INVALID');
