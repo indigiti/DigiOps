@@ -21,6 +21,9 @@ use DigiOps\Targets\RemoteDeploymentDriver;
 if ($_SERVER['REQUEST_METHOD']!=='POST') JsonResponse::send(['error'=>'METHOD_NOT_ALLOWED'],405);
 $user=Session::requireRole(['admin','operator']);
 Session::assertCsrf();
+// Release the PHP session lock before long-running deployment work so
+// deploy-status and health requests can run concurrently.
+if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 $data=json_decode(file_get_contents('php://input') ?: '',true);
 if (!is_array($data)) JsonResponse::send(['error'=>'INVALID_JSON'],400);
 
