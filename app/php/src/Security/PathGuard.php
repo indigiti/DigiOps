@@ -26,6 +26,20 @@ final class PathGuard
         return 'private_html/' . self::slug($slug) . '/';
     }
 
+    public static function targetRelative(string $path, string $scope): string
+    {
+        $scope = $scope === 'private' ? 'private_html' : 'public_html';
+        $path = trim(str_replace('\\', '/', trim($path)), '/');
+        if ($path === $scope) return $scope . '/';
+        if (str_contains($path, '..') || !str_starts_with($path, $scope . '/')) {
+            throw new InvalidArgumentException('UNMANAGED_TARGET_PATH');
+        }
+        if (!preg_match('#^(public_html|private_html)(?:/[A-Za-z0-9._/-]+)?/?$#', $path)) {
+            throw new InvalidArgumentException('UNMANAGED_TARGET_PATH');
+        }
+        return rtrim($path, '/') . '/';
+    }
+
     public static function assertManagedRelative(string $path): string
     {
         $path = str_replace('\\', '/', trim($path));
