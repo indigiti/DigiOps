@@ -197,6 +197,19 @@ function app(){
     get githubConnected(){return !!(this.githubInfo && this.githubInfo.connected===true)},
     get githubNeedsConnection(){return !!(this.githubInfo && this.githubInfo.connected===false)},
     get githubError(){return this.githubInfo && this.githubInfo.error ? this.githubInfo.error : ''},
+    get githubErrorMessage(){
+      const code=this.githubError
+      if(!code)return ''
+      if(code.startsWith('GITHUB_REPOSITORY_HTTP_404'))return 'Repository is private or the saved GitHub token cannot access this repository.'
+      if(code.startsWith('GITHUB_REPOSITORY_HTTP_401'))return 'Saved GitHub token is invalid or expired.'
+      if(code.startsWith('GITHUB_REPOSITORY_HTTP_403'))return 'Saved GitHub token does not have permission to read this repository.'
+      if(code.startsWith('GITHUB_BRANCHES_HTTP_'))return 'Repository is reachable, but DigiOps cannot read its branches with the saved GitHub token.'
+      if(code.startsWith('GITHUB_COMMITS_HTTP_404'))return 'Configured branch was not found or cannot be read.'
+      if(code.startsWith('GITHUB_COMMITS_HTTP_'))return 'Repository is reachable, but DigiOps cannot read commits for the configured branch.'
+      if(code.startsWith('GITHUB_ACTIONS_HTTP_404')||code.startsWith('GITHUB_ACTIONS_HTTP_403'))return 'Source is reachable, but GitHub Actions cannot be read. Grant Actions read access to the saved token.'
+      if(code.startsWith('GITHUB_ARTIFACTS_HTTP_404')||code.startsWith('GITHUB_ARTIFACTS_HTTP_403'))return 'Workflow is reachable, but deployment artifacts cannot be read. Grant Actions read access to the saved token.'
+      return code
+    },
     get candidate(){return this.githubInfo && this.githubInfo.candidate ? this.githubInfo.candidate : null},
     get candidateReady(){return !!(this.candidate && this.candidate.ready)},
     get candidateReason(){return this.candidate && this.candidate.reason ? this.candidate.reason : 'checking'},
@@ -304,8 +317,15 @@ function app(){
     },
     get updateMessage(){
       if(!this.githubInfo)return 'Not checked yet. No GitHub request is made when the application opens.'
+      if(this.githubError)return this.githubErrorMessage
       if(this.githubNeedsConnection)return 'Connect GitHub to check repository updates.'
-      return this.githubInfo.updateAvailable ? 'New commit available.' : 'No newer commit detected.'
+      if(this.candidateReason==='artifact-not-found')return 'Source detected. The latest successful workflow has no deployment artifact.'
+      if(this.candidateReason==='artifact-expired')return 'Source detected. The deployment artifact has expired.'
+      if(this.candidateReason==='no-successful-workflow-run')return 'Source detected. No successful workflow run is available yet.'
+      const deployed=this.deployedInfo && this.deployedInfo.commit ? this.deployedInfo.commit : ''
+      if(!deployed && this.candidateReady)return 'Not deployed yet. A verified deployment candidate is ready.'
+      if(this.githubInfo.sourceUpdateAvailable && !this.githubInfo.updateAvailable)return 'New source commit detected, but no newer deployable artifact is ready.'
+      return this.githubInfo.updateAvailable ? 'New deployable build available.' : 'Application is on the latest deployable build.'
     },
     get filePathLabel(){
       if(!this.fileListing)return ''
@@ -458,10 +478,10 @@ function app(){
       try{
         this.setOperation(28,'Reading workflow runs and artifacts…')
         const ok=await this.loadGithubInfo(true)
-        if(!ok)throw new Error(this.githubError||'UPDATE_CHECK_FAILED')
+        if(!ok)throw new Error(this.githubErrorMessage||this.githubError||'UPDATE_CHECK_FAILED')
         this.setOperation(82,'Comparing deployed commit with the latest successful artifact…')
         this.setOperation(96,'Refreshing deployment candidate details…')
-        this.notice=this.githubInfo && this.githubInfo.updateAvailable ? 'Update available and deployment candidate refreshed.' : 'Application is already on the latest deployable build.'
+        this.notice=this.updateMessage
         this.completeOperation('Update check complete.')
       }catch(e){
         this.error=e.message;this.failOperation('Update check failed: '+e.message)
@@ -837,7 +857,7 @@ document.querySelector('#app').innerHTML=`
           <div class="mb-5 flex gap-6 overflow-x-auto border-b border-slate-200"><template x-for="t in ['overview','deploy','releases','files','health','settings']"><button @click="setTab(t)" class="tab capitalize" :class="projectTab===t?'active':''" x-text="t"></button></template></div>
           <div x-show="projectTab==='overview'" class="grid gap-5 xl:grid-cols-[1.4fr_.8fr]">
             <div class="panel"><h2 class="font-bold">Deployment configuration</h2><div class="row"><span><b class="block text-sm">Public URL</b><small class="text-slate-500">Browser route</small></span><code x-text="selectedUrl"></code></div><div class="row"><span><b class="block text-sm">Public folder</b><small class="text-slate-500">Release payload only</small></span><code class="text-xs" x-text="selectedPublicPath"></code></div><div class="row"><span><b class="block text-sm">Private folder</b><small class="text-slate-500">Runtime and metadata</small></span><code class="text-xs" x-text="selectedPrivatePath"></code></div><div class="row"><span><b class="block text-sm">Current commit</b></span><code x-text="selectedCommit"></code></div></div>
-            <div class="space-y-5"><div class="panel"><h2 class="font-bold">GitHub</h2><p class="muted mt-1" x-show="!githubInfo">Not checked yet. DigiOps does not query GitHub just by opening this application.</p><div x-show="githubConnected"><div class="mt-4 flex items-center gap-2 text-sm"><i data-lucide="check-circle-2" class="h-4 w-4 text-emerald-600"></i>Connected</div><div class="mt-4 text-sm"><span class="text-slate-500">Latest workflow</span><b class="mt-1 block" x-text="latestWorkflowStatus"></b></div></div><p x-show="githubError" class="mt-3 text-sm text-rose-600" x-text="githubError"></p></div><div class="panel"><h2 class="font-bold">Update</h2><p class="muted mt-2" x-text="updateMessage"></p><div class="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">Performance mode: GitHub, health, releases and files are loaded on demand and cached per application for this session.</div></div></div>
+            <div class="space-y-5"><div class="panel"><h2 class="font-bold">GitHub</h2><p class="muted mt-1" x-show="!githubInfo">Not checked yet. DigiOps does not query GitHub just by opening this application.</p><div x-show="githubConnected"><div class="mt-4 flex items-center gap-2 text-sm"><i data-lucide="check-circle-2" class="h-4 w-4 text-emerald-600"></i>Connected</div><div class="mt-4 text-sm"><span class="text-slate-500">Latest workflow</span><b class="mt-1 block" x-text="latestWorkflowStatus"></b></div></div><p x-show="githubError" class="mt-3 text-sm text-rose-600" x-text="githubErrorMessage"></p></div><div class="panel"><h2 class="font-bold">Update</h2><p class="muted mt-2" x-text="updateMessage"></p><div class="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">Performance mode: GitHub, health, releases and files are loaded on demand and cached per application for this session.</div></div></div>
           </div>
           <div x-show="projectTab==='deploy'" class="space-y-5">
             <div x-show="githubNeedsConnection" class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"><b>GitHub connection required.</b> Connect a GitHub token before checking workflows or deploying artifacts. <button type="button" @click="go('settings')" class="ml-2 font-semibold underline">Open Connections</button></div>
