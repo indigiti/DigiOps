@@ -18,5 +18,22 @@ $copy=function(string $src,string $dst) use (&$copy): void {
 $remove($out);mkdir($out,0755,true);
 $copy($dist,$out.'/public');
 $copy($root.'/app/php',$out.'/private/app/php');
-file_put_contents($out.'/RELEASE.json',json_encode(['name'=>'DigiOps','version'=>'1.0.0','builtAt'=>date(DATE_ATOM),'public'=>'public','private'=>'private'],JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES));
+$package=json_decode((string)file_get_contents($root.'/package.json'),true);
+$version=is_array($package)?(string)($package['version']??'0.0.0'):'0.0.0';
+$build=[
+    'schema'=>'DIGIOPS-BUILD/1',
+    'name'=>'DigiOps',
+    'version'=>$version,
+    'builtAt'=>date(DATE_ATOM),
+    'sourceSha'=>(string)(getenv('GITHUB_SHA')?:'local'),
+    'branch'=>(string)(getenv('GITHUB_REF_NAME')?:'local'),
+    'ciRunNumber'=>(string)(getenv('GITHUB_RUN_NUMBER')?:''),
+    'ciRunId'=>(string)(getenv('GITHUB_RUN_ID')?:''),
+    'ciRunAttempt'=>(string)(getenv('GITHUB_RUN_ATTEMPT')?:''),
+    'public'=>'public',
+    'private'=>'private',
+];
+file_put_contents($out.'/RELEASE.json',json_encode($build,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES).PHP_EOL);
+if(!is_dir($out.'/private/build'))mkdir($out.'/private/build',0755,true);
+file_put_contents($out.'/private/build/release.json',json_encode($build,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES).PHP_EOL);
 echo "release built\n";
