@@ -18,6 +18,7 @@ $copy=function(string $src,string $dst) use (&$copy): void {
 $remove($out);mkdir($out,0755,true);
 $copy($dist,$out.'/public');
 $copy($root.'/app/php',$out.'/private/app/php');
+if (is_dir($root.'/agent')) $copy($root.'/agent',$out.'/private/agent');
 $package=json_decode((string)file_get_contents($root.'/package.json'),true);
 $version=is_array($package)?(string)($package['version']??'0.0.0'):'0.0.0';
 $build=[
