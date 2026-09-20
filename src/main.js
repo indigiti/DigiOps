@@ -33,6 +33,9 @@ function app(){
     login:{username:'',password:'',totp:''},
     install:{name:'Administrator',username:'admin',password:'',confirm:'',totpSecret:''},
     github:{token:'',testRepo:'indigiti/DigiOps'},
+    infra:null, redisStatus:null,
+    redisForm:{host:'127.0.0.1',port:6379,username:'',password:'',database:0,prefix:'digiops:',timeout:1.5},
+    varnishForm:{enabled:true,bypassPath:'/digiops/',sessionCookie:'DIGIOPSSESSID',apiPath:'/digiops/api/'},
     form:{name:'',repo:'',branch:'main',slug:'',artifactName:'digiops-release',healthPath:'/',retention:5},
 
     async init(){
@@ -231,7 +234,7 @@ function app(){
       return this.health && this.health.runtime && this.health.runtime.php ? 'PHP '+this.health.runtime.php : 'Not checked'
     },
     auditHashPrefix(a){return a && a.hash ? String(a.hash).slice(0,12) : ''},
-    go(page){this.page=page;this.sidebarOpen=false;this.clearMessages();if(page==='audit')this.loadAudit();icons()},
+    go(page){this.page=page;this.sidebarOpen=false;this.clearMessages();if(page==='audit')this.loadAudit();if(page==='settings')this.loadInfrastructure();icons()},
     async openProject(id){
       this.selectedId=id;this.page='project';this.projectTab='overview';this.githubInfo=null;this.releases=[];this.fileListing=null;this.health=null;this.sidebarOpen=false;icons()
       await Promise.allSettled([this.loadGithubInfo(),this.loadReleases()])
@@ -410,9 +413,51 @@ function app(){
       icons()
     },
     async loadAudit(){
-      if(this.user?.role!=='admin')return
+      if(this.userRole!=='admin')return
       try{const d=await api('./api/audit.php?limit=150');this.audit=d.events||[]}catch(e){this.error=e.message}
       icons()
+    },
+    async loadInfrastructure(){
+      try{
+        const d=await api('./api/infrastructure.php')
+        this.infra=d
+        Object.assign(this.redisForm,{
+          host:d.redis&&d.redis.host?d.redis.host:'127.0.0.1',
+          port:d.redis&&d.redis.port?d.redis.port:6379,
+          username:d.redis&&d.redis.username?d.redis.username:'',
+          password:'',
+          database:d.redis&&Number.isFinite(Number(d.redis.database))?Number(d.redis.database):0,
+          prefix:d.redis&&d.redis.prefix?d.redis.prefix:'digiops:',
+          timeout:d.redis&&d.redis.timeout?d.redis.timeout:1.5
+        })
+        if(d.varnish)Object.assign(this.varnishForm,d.varnish)
+      }catch(e){this.error=e.message}
+      icons()
+    },
+    async testRedis(save=false){
+      if(this.userRole!=='admin')return
+      this.clearMessages();this.busy=true
+      this.startOperation('redis',save?'Saving Redis connection':'Testing Redis connection','Opening Redis connection and authenticating…',25,false)
+      try{
+        const payload={action:save?'redis-save':'redis-test',...this.redisForm}
+        const d=await api('./api/infrastructure.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify(payload)})
+        this.redisStatus=d.test||null
+        this.redisForm.password=''
+        this.notice=save?'Redis configuration saved securely.':'Redis connection test passed.'
+        this.completeOperation(save?'Redis configuration saved.':'Redis connection verified.')
+        if(save)await this.loadInfrastructure()
+      }catch(e){this.error=e.message;this.failOperation('Redis check failed: '+e.message)}
+      finally{this.busy=false;icons()}
+    },
+    async saveVarnishPolicy(){
+      if(this.userRole!=='admin')return
+      this.clearMessages();this.busy=true
+      try{
+        const d=await api('./api/infrastructure.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({action:'varnish-save',...this.varnishForm})})
+        if(d.varnish)Object.assign(this.varnishForm,d.varnish)
+        this.notice='Varnish policy saved. Apply the shown exclusions in Cloudways.'
+      }catch(e){this.error=e.message}
+      finally{this.busy=false;icons()}
     },
     setTab(tab){
       this.projectTab=tab
@@ -588,8 +633,46 @@ document.querySelector('#app').innerHTML=`
           <div x-show="projectTab==='settings'" class="panel"><h2 class="font-bold">Application settings</h2><div class="mt-5 grid gap-4 md:grid-cols-2"><div><span class="muted">Repository</span><b class="mt-1 block" x-text="selectedRepo"></b></div><div><span class="muted">Branch</span><b class="mt-1 block" x-text="selectedBranch"></b></div><div><span class="muted">Artifact</span><b class="mt-1 block" x-text="selectedArtifactName"></b></div><div><span class="muted">Health path</span><b class="mt-1 block" x-text="selectedHealthPath"></b></div></div></div>
         </section>
 
-        <section x-show="page==='settings'">
-          <div class="max-w-2xl panel"><p class="text-sm font-medium text-blue-600">Connection</p><h1 class="mt-1 text-xl font-bold">GitHub access</h1><p class="muted mt-2">Use a fine-grained token with read access to required repositories, Actions and artifacts. The token is encrypted in private_html and is never returned to the browser.</p><form @submit.prevent="connectGithub()" class="mt-5 space-y-4"><label class="block text-sm"><span class="mb-1.5 block font-semibold">GitHub token</span><input x-model="github.token" type="password" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="block text-sm"><span class="mb-1.5 block font-semibold">Test repository</span><input x-model="github.testRepo" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label><button class="btn btn-primary" :disabled="busy"><i data-lucide="github" class="h-4 w-4"></i>Connect GitHub</button></form></div>
+        <section x-show="page==='settings'" class="space-y-5">
+          <div><p class="text-sm font-medium text-blue-600">Connections & infrastructure</p><h1 class="mt-1 text-2xl font-bold">Settings</h1><p class="muted mt-1">Manage external services and verify the runtime environment from one place.</p></div>
+
+          <div class="grid gap-5 xl:grid-cols-2">
+            <div class="panel">
+              <p class="text-sm font-medium text-blue-600">Connection</p><h2 class="mt-1 text-xl font-bold">GitHub access</h2><p class="muted mt-2">Fine-grained token with repository, Actions and artifact read access. The token is encrypted in private storage and never returned to the browser.</p>
+              <form @submit.prevent="connectGithub()" class="mt-5 space-y-4">
+                <label class="block text-sm"><span class="mb-1.5 block font-semibold">GitHub token</span><input x-model="github.token" type="password" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label>
+                <label class="block text-sm"><span class="mb-1.5 block font-semibold">Test repository</span><input x-model="github.testRepo" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
+                <button class="btn btn-primary" :disabled="busy"><i data-lucide="github" class="h-4 w-4"></i>Connect GitHub</button>
+              </form>
+            </div>
+
+            <div class="panel">
+              <div class="flex items-start justify-between gap-3"><div><p class="text-sm font-medium text-violet-600">Infrastructure</p><h2 class="mt-1 text-xl font-bold">Redis</h2><p class="muted mt-2">Store credentials securely, test connectivity, and reserve a DigiOps key prefix.</p></div><span class="pill" :class="infra&&infra.redis&&infra.redis.configured?'border-emerald-200 bg-emerald-50 text-emerald-700':'border-slate-200'"><span class="status-dot" :class="infra&&infra.redis&&infra.redis.configured?'bg-emerald-500':'bg-slate-400'"></span><span x-text="infra&&infra.redis&&infra.redis.configured?'Configured':'Not configured'"></span></span></div>
+              <div class="mt-5 grid gap-4 sm:grid-cols-2">
+                <label class="text-sm"><span class="mb-1.5 block font-semibold">Host</span><input x-model="redisForm.host" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" placeholder="127.0.0.1"></label>
+                <label class="text-sm"><span class="mb-1.5 block font-semibold">Port</span><input x-model="redisForm.port" type="number" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
+                <label class="text-sm"><span class="mb-1.5 block font-semibold">Username</span><input x-model="redisForm.username" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
+                <label class="text-sm"><span class="mb-1.5 block font-semibold">Password</span><input x-model="redisForm.password" type="password" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" placeholder="Leave blank to keep saved password"></label>
+                <label class="text-sm"><span class="mb-1.5 block font-semibold">Database</span><input x-model="redisForm.database" type="number" min="0" max="15" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
+                <label class="text-sm"><span class="mb-1.5 block font-semibold">Prefix</span><input x-model="redisForm.prefix" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
+              </div>
+              <div x-show="redisStatus" class="mt-4 rounded-2xl bg-slate-50 p-4 text-sm">
+                <div class="grid gap-2 sm:grid-cols-4"><div><span class="muted">Latency</span><b class="mt-1 block" x-text="redisStatus&&redisStatus.latencyMs?redisStatus.latencyMs+' ms':'—'"></b></div><div><span class="muted">Driver</span><b class="mt-1 block" x-text="redisStatus&&redisStatus.driver?redisStatus.driver:'—'"></b></div><div><span class="muted">Version</span><b class="mt-1 block" x-text="redisStatus&&redisStatus.version?redisStatus.version:'—'"></b></div><div><span class="muted">Memory</span><b class="mt-1 block" x-text="redisStatus&&redisStatus.memory?redisStatus.memory:'—'"></b></div></div>
+              </div>
+              <div class="mt-5 flex flex-wrap gap-2"><button @click="testRedis(false)" class="btn" :disabled="busy||userRole!=='admin'"><i data-lucide="activity" class="h-4 w-4"></i>Test connection</button><button @click="testRedis(true)" class="btn btn-primary" :disabled="busy||userRole!=='admin'"><i data-lucide="shield-check" class="h-4 w-4"></i>Save securely</button></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="flex flex-wrap items-start justify-between gap-4"><div><p class="text-sm font-medium text-amber-600">Cache policy</p><h2 class="mt-1 text-xl font-bold">Varnish</h2><p class="muted mt-2">DigiOps should bypass Varnish because it is an authenticated control plane. Keep Varnish enabled globally for public sites, but exclude DigiOps.</p></div><span class="pill border-amber-200 bg-amber-50 text-amber-800">Cloudways service control not connected</span></div>
+            <div class="mt-5 grid gap-4 md:grid-cols-3">
+              <label class="text-sm"><span class="mb-1.5 block font-semibold">Bypass path</span><input x-model="varnishForm.bypassPath" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
+              <label class="text-sm"><span class="mb-1.5 block font-semibold">Session cookie</span><input x-model="varnishForm.sessionCookie" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
+              <label class="text-sm"><span class="mb-1.5 block font-semibold">API path</span><input x-model="varnishForm.apiPath" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
+            </div>
+            <div class="mt-4 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900"><b>Recommended Cloudways exclusions</b><div class="mt-2 grid gap-1 font-mono text-xs"><span x-text="'URL: '+varnishForm.bypassPath"></span><span x-text="'URL: '+varnishForm.apiPath"></span><span x-text="'Cookie: '+varnishForm.sessionCookie"></span></div><p class="mt-3 text-xs">After changing exclusions in Cloudways, purge Varnish once. DigiOps cannot toggle the Cloudways Varnish service until a Cloudways API connection is configured.</p></div>
+            <div class="mt-5 flex gap-2"><button @click="saveVarnishPolicy()" class="btn btn-primary" :disabled="busy||userRole!=='admin'"><i data-lucide="shield-check" class="h-4 w-4"></i>Save policy</button></div>
+          </div>
         </section>
 
         <section x-show="page==='audit'">
