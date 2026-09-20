@@ -13,9 +13,13 @@ use DigiOps\Support\JsonResponse;
 use DigiOps\Targets\RemoteDeploymentDriver;
 use DigiOps\Targets\TargetService;
 
+if(($_SERVER['REQUEST_METHOD']??'GET')!=='POST') JsonResponse::send(['error'=>'METHOD_NOT_ALLOWED'],405);
 $user=Session::requireRole(['admin','operator']);
-$projectId=(string)($_GET['project']??'');
-$commit=strtolower(trim((string)($_GET['commit']??'')));
+Session::assertCsrf();
+$data=json_decode(file_get_contents('php://input') ?: '',true);
+if(!is_array($data)) JsonResponse::send(['error'=>'INVALID_JSON'],400);
+$projectId=(string)($data['project']??'');
+$commit=strtolower(trim((string)($data['commit']??'')));
 
 if($projectId==='') JsonResponse::send(['error'=>'PROJECT_REQUIRED'],400);
 if(!preg_match('/^[a-f0-9]{40}$/',$commit)) JsonResponse::send(['error'=>'COMMIT_REQUIRED'],400);
