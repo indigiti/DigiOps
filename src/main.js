@@ -34,6 +34,8 @@ function app(){
     install:{name:'Administrator',username:'admin',password:'',confirm:'',totpSecret:''},
     github:{token:'',testRepo:'indigiti/DigiOps'},
     infra:null, redisStatus:null,
+    redisMode:'cloudways',
+    redisAdvanced:false,
     redisForm:{host:'127.0.0.1',port:6379,username:'',password:'',database:0,prefix:'digiops:',timeout:1.5},
     varnishForm:{enabled:true,bypassPath:'/digiops/',sessionCookie:'DIGIOPSSESSID',apiPath:'/digiops/api/'},
     form:{name:'',repo:'',branch:'main',slug:'',artifactName:'digiops-release',healthPath:'/',retention:5},
@@ -647,15 +649,31 @@ document.querySelector('#app').innerHTML=`
             </div>
 
             <div class="panel">
-              <div class="flex items-start justify-between gap-3"><div><p class="text-sm font-medium text-violet-600">Infrastructure</p><h2 class="mt-1 text-xl font-bold">Redis</h2><p class="muted mt-2">Store credentials securely, test connectivity, and reserve a DigiOps key prefix.</p></div><span class="pill" :class="infra&&infra.redis&&infra.redis.configured?'border-emerald-200 bg-emerald-50 text-emerald-700':'border-slate-200'"><span class="status-dot" :class="infra&&infra.redis&&infra.redis.configured?'bg-emerald-500':'bg-slate-400'"></span><span x-text="infra&&infra.redis&&infra.redis.configured?'Configured':'Not configured'"></span></span></div>
-              <div class="mt-5 grid gap-4 sm:grid-cols-2">
-                <label class="text-sm"><span class="mb-1.5 block font-semibold">Host</span><input x-model="redisForm.host" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" placeholder="127.0.0.1"></label>
-                <label class="text-sm"><span class="mb-1.5 block font-semibold">Port</span><input x-model="redisForm.port" type="number" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
+              <div class="flex items-start justify-between gap-3"><div><p class="text-sm font-medium text-violet-600">Infrastructure</p><h2 class="mt-1 text-xl font-bold">Redis</h2><p class="muted mt-2">Cloudways mode uses only the application Redis details shown in your Cloudways panel.</p></div><span class="pill" :class="infra&&infra.redis&&infra.redis.configured?'border-emerald-200 bg-emerald-50 text-emerald-700':'border-slate-200'"><span class="status-dot" :class="infra&&infra.redis&&infra.redis.configured?'bg-emerald-500':'bg-slate-400'"></span><span x-text="infra&&infra.redis&&infra.redis.configured?'Configured':'Not configured'"></span></span></div>
+
+              <div class="mt-4 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1 text-sm font-semibold">
+                <button type="button" @click="redisMode='cloudways';redisAdvanced=false" class="rounded-lg px-3 py-2" :class="redisMode==='cloudways'?'bg-white text-slate-950 shadow-sm':'text-slate-500'">Cloudways</button>
+                <button type="button" @click="redisMode='custom';redisAdvanced=true" class="rounded-lg px-3 py-2" :class="redisMode==='custom'?'bg-white text-slate-950 shadow-sm':'text-slate-500'">Advanced / Custom</button>
+              </div>
+
+              <div class="mt-5 grid gap-4 sm:grid-cols-3">
+                <label class="text-sm"><span class="mb-1.5 block font-semibold">Prefix</span><input x-model="redisForm.prefix" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" placeholder="app-prefix:"></label>
                 <label class="text-sm"><span class="mb-1.5 block font-semibold">Username</span><input x-model="redisForm.username" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
                 <label class="text-sm"><span class="mb-1.5 block font-semibold">Password</span><input x-model="redisForm.password" type="password" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" placeholder="Leave blank to keep saved password"></label>
-                <label class="text-sm"><span class="mb-1.5 block font-semibold">Database</span><input x-model="redisForm.database" type="number" min="0" max="15" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
-                <label class="text-sm"><span class="mb-1.5 block font-semibold">Prefix</span><input x-model="redisForm.prefix" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label>
               </div>
+
+              <div x-show="redisAdvanced" class="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div class="mb-3"><b>Advanced connection</b><p class="mt-1 text-xs text-slate-500">Only use this for non-Cloudways Redis or when you know the endpoint details.</p></div>
+                <div class="grid gap-4 sm:grid-cols-2">
+                  <label class="text-sm"><span class="mb-1.5 block font-semibold">Host</span><input x-model="redisForm.host" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5" placeholder="127.0.0.1"></label>
+                  <label class="text-sm"><span class="mb-1.5 block font-semibold">Port</span><input x-model="redisForm.port" type="number" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"></label>
+                  <label class="text-sm"><span class="mb-1.5 block font-semibold">Database</span><input x-model="redisForm.database" type="number" min="0" max="15" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"></label>
+                  <label class="text-sm"><span class="mb-1.5 block font-semibold">Timeout</span><input x-model="redisForm.timeout" type="number" min="0.3" max="5" step="0.1" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"></label>
+                </div>
+              </div>
+
+              <div class="mt-4 rounded-2xl bg-blue-50 px-4 py-3 text-xs leading-relaxed text-blue-900"><b>Cloudways mode:</b> paste only the Prefix, Username and Password from Application → Access Details → Redis. DigiOps keeps the password encrypted in private storage.</div>
+
               <div x-show="redisStatus" class="mt-4 rounded-2xl bg-slate-50 p-4 text-sm">
                 <div class="grid gap-2 sm:grid-cols-4"><div><span class="muted">Latency</span><b class="mt-1 block" x-text="redisStatus&&redisStatus.latencyMs?redisStatus.latencyMs+' ms':'—'"></b></div><div><span class="muted">Driver</span><b class="mt-1 block" x-text="redisStatus&&redisStatus.driver?redisStatus.driver:'—'"></b></div><div><span class="muted">Version</span><b class="mt-1 block" x-text="redisStatus&&redisStatus.version?redisStatus.version:'—'"></b></div><div><span class="muted">Memory</span><b class="mt-1 block" x-text="redisStatus&&redisStatus.memory?redisStatus.memory:'—'"></b></div></div>
               </div>
