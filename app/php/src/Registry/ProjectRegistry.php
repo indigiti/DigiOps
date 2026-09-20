@@ -67,14 +67,31 @@ final class ProjectRegistry
     private function normalize(array $project): array
     {
         $slug = PathGuard::slug((string)($project['id'] ?? $project['slug'] ?? ''));
+        $targetId = PathGuard::slug((string)($project['targetId'] ?? 'local'));
+        $url = '/' . $slug . '/';
+        $publicPath = PathGuard::publicRelative($slug);
+        $privatePath = PathGuard::privateRelative($slug);
+
+        if ($targetId !== 'local') {
+            $candidateUrl = trim((string)($project['url'] ?? ''));
+            if ($candidateUrl !== '') {
+                if (!filter_var($candidateUrl, FILTER_VALIDATE_URL) || strtolower((string)parse_url($candidateUrl, PHP_URL_SCHEME)) !== 'https') {
+                    throw new InvalidArgumentException('REMOTE_HTTPS_URL_REQUIRED');
+                }
+                $url = rtrim($candidateUrl, '/') . '/';
+            }
+            $publicPath = PathGuard::targetRelative((string)($project['publicPath'] ?? ('public_html/' . $slug . '/')), 'public');
+            $privatePath = PathGuard::targetRelative((string)($project['privatePath'] ?? ('private_html/' . $slug . '/')), 'private');
+        }
+
         return [
             'id' => $slug,
             'name' => trim((string)($project['name'] ?? $slug)) ?: $slug,
             'repo' => trim((string)($project['repo'] ?? '')),
             'branch' => trim((string)($project['branch'] ?? 'main')) ?: 'main',
-            'url' => '/' . $slug . '/',
-            'publicPath' => PathGuard::publicRelative($slug),
-            'privatePath' => PathGuard::privateRelative($slug),
+            'url' => $url,
+            'publicPath' => $publicPath,
+            'privatePath' => $privatePath,
             'status' => (string)($project['status'] ?? 'configured'),
             'health' => (string)($project['health'] ?? 'pending'),
             'update' => (bool)($project['update'] ?? false),
@@ -83,7 +100,7 @@ final class ProjectRegistry
             'lastDeploy' => (string)($project['lastDeploy'] ?? 'Never'),
             'stack' => array_values(array_filter((array)($project['stack'] ?? ['Auto-detect']), 'is_string')),
             'environment' => (string)($project['environment'] ?? 'Stage'),
-            'targetId' => PathGuard::slug((string)($project['targetId'] ?? 'local')),
+            'targetId' => $targetId,
             'artifactName' => trim((string)($project['artifactName'] ?? 'digiops-release')),
             'healthPath' => trim((string)($project['healthPath'] ?? '/')),
             'retention' => max(1, min(20, (int)($project['retention'] ?? 5))),
