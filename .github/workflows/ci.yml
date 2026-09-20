@@ -40,14 +40,15 @@ jobs:
           path: verified-release
       - name: Verify uploaded artifact
         run: |
-          test -f verified-release/index.html
-          test -f verified-release/.htaccess
-          test -f verified-release/api/session.php
-          test -f verified-release/../verified-release/.htaccess
-          grep -F "RewriteBase /digiops/" verified-release/.htaccess
-          grep -F "RewriteRule ^api/ - [L]" verified-release/.htaccess
-          grep -F "RewriteRule ^ index.html [L]" verified-release/.htaccess
-          test -f verified-release/../verified-release/index.html
+          test -f verified-release/public/index.html
+          test -f verified-release/public/.htaccess
+          test -f verified-release/public/api/session.php
+          test -f verified-release/private/app/php/bootstrap.php
+          test -f verified-release/private/build/release.json
+          grep -F "RewriteBase /digiops/" verified-release/public/.htaccess
+          grep -F "RewriteRule ^api/ - [L]" verified-release/public/.htaccess
+          grep -F "RewriteRule ^ index.html [L]" verified-release/public/.htaccess
+          grep -E 'src="/digiops/assets/|href="/digiops/' verified-release/public/index.html
           echo "Uploaded artifact certification: PASS"
 
   php:
