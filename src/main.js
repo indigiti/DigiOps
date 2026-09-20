@@ -33,7 +33,7 @@ function app(){
     login:{username:'',password:'',totp:''},
     install:{name:'Administrator',username:'admin',password:'',confirm:'',totpSecret:''},
     github:{token:'',testRepo:'indigiti/DigiOps'},
-    infra:null, redisStatus:null,
+    infra:null, runtimeInfo:null, redisStatus:null,
     redisMode:'cloudways',
     redisAdvanced:false,
     redisForm:{host:'127.0.0.1',port:6379,username:'',password:'',database:0,prefix:'digiops:',timeout:1.5},
@@ -236,7 +236,7 @@ function app(){
       return this.health && this.health.runtime && this.health.runtime.php ? 'PHP '+this.health.runtime.php : 'Not checked'
     },
     auditHashPrefix(a){return a && a.hash ? String(a.hash).slice(0,12) : ''},
-    go(page){this.page=page;this.sidebarOpen=false;this.clearMessages();if(page==='audit')this.loadAudit();if(page==='settings')this.loadInfrastructure();icons()},
+    go(page){this.page=page;this.sidebarOpen=false;this.clearMessages();if(page==='audit')this.loadAudit();if(page==='settings'){this.loadInfrastructure();this.loadRuntimeInfo()}icons()},
     async openProject(id){
       this.selectedId=id;this.page='project';this.projectTab='overview';this.githubInfo=null;this.releases=[];this.fileListing=null;this.health=null;this.sidebarOpen=false;icons()
       await Promise.allSettled([this.loadGithubInfo(),this.loadReleases()])
@@ -419,6 +419,13 @@ function app(){
       try{const d=await api('./api/audit.php?limit=150');this.audit=d.events||[]}catch(e){this.error=e.message}
       icons()
     },
+    async loadRuntimeInfo(){
+      try{
+        const d=await api('./api/runtime.php')
+        this.runtimeInfo=d.runtime||null
+      }catch(e){this.error=e.message}
+      icons()
+    },
     async loadInfrastructure(){
       try{
         const d=await api('./api/infrastructure.php')
@@ -594,7 +601,34 @@ document.querySelector('#app').innerHTML=`
               </div>
             </div>
 
-            <div class="grid gap-5 xl:grid-cols-2">
+            <div class="panel">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div><p class="text-sm font-medium text-emerald-600">Runtime identity</p><h2 class="mt-1 text-xl font-bold">Installed DigiOps version</h2><p class="muted mt-2">Shows the exact build currently running on this Cloudways application.</p></div>
+              <span class="pill" :class="runtimeInfo&&runtimeInfo.identityVerified?'border-emerald-200 bg-emerald-50 text-emerald-700':'border-amber-200 bg-amber-50 text-amber-800'">
+                <span class="status-dot" :class="runtimeInfo&&runtimeInfo.identityVerified?'bg-emerald-500':'bg-amber-500'"></span>
+                <span x-text="runtimeInfo&&runtimeInfo.identityVerified?'Verified build':'Identity not verified'"></span>
+              </span>
+            </div>
+            <div class="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <div class="stat-card"><span class="muted">App version</span><div class="mt-2 text-xl font-bold" x-text="runtimeInfo&&runtimeInfo.version?runtimeInfo.version:'—'"></div></div>
+              <div class="stat-card"><span class="muted">CI run</span><div class="mt-2 text-xl font-bold" x-text="runtimeInfo&&runtimeInfo.ciRunNumber?'#'+runtimeInfo.ciRunNumber:'—'"></div><div class="mt-1 text-xs text-slate-500" x-text="runtimeInfo&&runtimeInfo.ciRunId?'ID '+runtimeInfo.ciRunId:'No CI identity'"></div></div>
+              <div class="stat-card"><span class="muted">Artifact ID</span><div class="mt-2 text-xl font-bold" x-text="runtimeInfo&&runtimeInfo.artifactId?runtimeInfo.artifactId:'—'"></div></div>
+              <div class="stat-card"><span class="muted">PHP runtime</span><div class="mt-2 text-xl font-bold" x-text="runtimeInfo&&runtimeInfo.phpVersion?runtimeInfo.phpVersion:'—'"></div></div>
+            </div>
+            <div class="mt-5 rounded-2xl bg-slate-50 p-4 text-sm">
+              <div class="grid gap-3 md:grid-cols-[170px_1fr]">
+                <span class="muted">Source commit</span><code class="break-all" x-text="runtimeInfo&&runtimeInfo.sourceSha?runtimeInfo.sourceSha:'—'"></code>
+                <span class="muted">Branch</span><span x-text="runtimeInfo&&runtimeInfo.branch?runtimeInfo.branch:'—'"></span>
+                <span class="muted">Built</span><span x-text="runtimeInfo&&runtimeInfo.builtAt?formatDate(runtimeInfo.builtAt):'—'"></span>
+                <span class="muted">Installed</span><span x-text="runtimeInfo&&runtimeInfo.installedAt?formatDate(runtimeInfo.installedAt):'—'"></span>
+                <span class="muted">Artifact created</span><span x-text="runtimeInfo&&runtimeInfo.artifactCreatedAt?formatDate(runtimeInfo.artifactCreatedAt):'—'"></span>
+                <span class="muted">Build manifests</span><span x-text="runtimeInfo&&runtimeInfo.buildManifestPresent&&runtimeInfo.installManifestPresent?'Build + install manifests present':'Legacy/incomplete identity metadata'"></span>
+              </div>
+            </div>
+            <div class="mt-5 flex flex-wrap gap-2"><button @click="loadRuntimeInfo()" class="btn"><i data-lucide="refresh-cw" class="h-4 w-4"></i>Verify running version</button></div>
+          </div>
+
+          <div class="grid gap-5 xl:grid-cols-2">
               <div class="panel">
                 <h3 class="font-bold">Current deployment</h3>
                 <div class="row"><span class="muted">Release</span><code x-text="deployedRelease"></code></div>
