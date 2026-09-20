@@ -17,6 +17,7 @@ $copy=function(string $src,string $dst) use (&$copy): void {
 };
 $remove($out);mkdir($out,0755,true);
 $copy($dist,$out.'/public');
+if (is_file($root.'/public/.htaccess')) $copy($root.'/public/.htaccess',$out.'/public/.htaccess');
 $copy($root.'/app/php',$out.'/private/app/php');
 if (is_dir($root.'/agent')) $copy($root.'/agent',$out.'/private/agent');
 $package=json_decode((string)file_get_contents($root.'/package.json'),true);
