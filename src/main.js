@@ -540,7 +540,10 @@ function app(){
         this.error='No verified deployment candidate is ready. Run Check update first.'
         return
       }
-      const summary='Deploy '+this.candidateRunNumber+' · artifact '+this.candidateArtifactId+' · '+this.candidateCommitShort+' to '+this.selected.url+'?'
+      const requestedCommit=this.candidateCommitSha==='—'?'':this.candidateCommitSha
+      const requestedRun=this.candidateRunNumber
+      const requestedArtifact=this.candidateArtifactId
+      const summary='Deploy '+requestedRun+' · artifact '+requestedArtifact+' · '+this.candidateCommitShort+' to '+this.selected.url+'?'
       if(!confirm(summary))return
       this.clearMessages();this.busy=true
       this.startOperation('deploy','Deploying '+this.selectedName,'Preparing verified deployment candidate…',6,true)
@@ -558,7 +561,7 @@ function app(){
           project:this.selected.id,
           runId:this.candidateRun ? this.candidateRun.id : 0,
           artifactId:this.candidateArtifact ? this.candidateArtifact.id : 0,
-          commit:this.candidateCommitSha==='—'?'':this.candidateCommitSha
+          commit:requestedCommit
         })})
         this.setOperation(94,'Deployment published. Refreshing application registry…')
         this.cacheDropProject(this.selected.id)
@@ -570,7 +573,32 @@ function app(){
         this.notice='Deployed release '+d.release
         this.completeOperation('Deployment complete and health check finished.')
       }catch(e){
-        this.error=e.message;this.failOperation('Deployment failed: '+e.message)
+        // A remote target can finish publishing and updating DigiOps' registry
+        // while the browser/proxy loses the final JSON response. Reconcile the
+        // requested immutable commit before declaring the deployment failed.
+        const transportError=e.message
+        this.setOperation(94,'Final response was interrupted. Verifying deployed commit…')
+        this.cacheDropProject(this.selected.id)
+        let reconciled=false
+        try{
+          await this.loadProjects()
+          const refreshed=await this.loadGithubInfo(true)
+          const deployedCommit=this.deployedInfo&&this.deployedInfo.commit?String(this.deployedInfo.commit):''
+          reconciled=!!(refreshed && requestedCommit && deployedCommit===requestedCommit)
+          if(reconciled){
+            this.error=''
+            this.setOperation(97,'Exact candidate is deployed. Refreshing release history…')
+            await this.loadReleases(true)
+            this.setOperation(99,'Running post-deploy health check…')
+            await this.checkHealth(true)
+            this.notice='Deployment verified after response interruption · '+requestedRun+' · artifact '+requestedArtifact+'.'
+            this.completeOperation('Deployment committed successfully; final response was lost but exact commit verification passed.')
+          }
+        }catch(_){}
+        if(!reconciled){
+          this.error=transportError
+          this.failOperation('Deployment failed: '+transportError)
+        }
       }finally{this.busy=false;icons()}
     },
     async rollback(release){
