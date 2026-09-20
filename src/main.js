@@ -556,13 +556,16 @@ function app(){
         {percent:84,message:'Overlaying private application code while preserving runtime data…'},
         {percent:91,message:'Waiting for final publish confirmation…'}
       ],1400)
+      const deployController=new AbortController()
+      const deployResponseTimer=setTimeout(()=>deployController.abort(),45000)
       try{
-        const d=await api('./api/deploy.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({
+        const d=await api('./api/deploy.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},signal:deployController.signal,body:JSON.stringify({
           project:this.selected.id,
           runId:this.candidateRun ? this.candidateRun.id : 0,
           artifactId:this.candidateArtifact ? this.candidateArtifact.id : 0,
           commit:requestedCommit
         })})
+        clearTimeout(deployResponseTimer)
         this.setOperation(94,'Deployment published. Refreshing application registry…')
         this.cacheDropProject(this.selected.id)
         await this.loadProjects()
@@ -573,15 +576,18 @@ function app(){
         this.notice='Deployed release '+d.release
         this.completeOperation('Deployment complete and health check finished.')
       }catch(e){
-        // Only transport/final-response failures are ambiguous. Concrete deploy
-        // errors must remain failures and must never be hidden by reconciliation.
-        const transportError=e.message
-        const ambiguous=/INVALID_RESPONSE|TARGET_CONNECT_FAILED|HTTP_50[234]|Failed to fetch|NetworkError/i.test(transportError)
+        clearTimeout(deployResponseTimer)
+        // The browser should never wait indefinitely for one long deployment
+        // response. If the response exceeds the bounded window, switch to the
+        // authoritative deploy-status channel while the server continues.
+        const aborted=e && e.name==='AbortError'
+        const transportError=aborted?'DEPLOY_RESPONSE_TIMEOUT':e.message
+        const ambiguous=aborted || /INVALID_RESPONSE|TARGET_CONNECT_FAILED|HTTP_50[234]|Failed to fetch|NetworkError/i.test(transportError)
         let reconciled=false
         if(ambiguous && requestedCommit){
-          this.setOperation(94,'Final response was interrupted. Verifying remote deployment…')
+          this.setOperation(94,'Deployment still running. Verifying server completion…')
           this.cacheDropProject(this.selected.id)
-          for(let attempt=1;attempt<=5 && !reconciled;attempt++){
+          for(let attempt=1;attempt<=60 && !reconciled;attempt++){
             try{
               const status=await api('./api/deploy-status.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id,commit:requestedCommit})})
               if(status && status.state==='deployed'){
@@ -589,9 +595,9 @@ function app(){
                 break
               }
             }catch(_){}
-            if(attempt<5){
-              this.setOperation(94,'Publish confirmation pending · verification '+attempt+'/5…')
-              await new Promise(resolve=>setTimeout(resolve,2500))
+            if(attempt<60){
+              this.setOperation(94,'Server publish in progress · verification '+attempt+'/60…')
+              await new Promise(resolve=>setTimeout(resolve,3000))
             }
           }
           if(reconciled){
@@ -609,9 +615,9 @@ function app(){
         }
         if(!reconciled){
           this.error=transportError
-          this.failOperation('Deployment failed: '+transportError)
+          this.failOperation(aborted?'Deployment confirmation timed out. Check server state before retrying.':'Deployment failed: '+transportError)
         }
-      }finally{this.busy=false;icons()}
+      }finally{clearTimeout(deployResponseTimer);this.busy=false;icons()}
     },
     async rollback(release){
       if(!confirm('Rollback '+this.selected.name+' to '+release+'?'))return
