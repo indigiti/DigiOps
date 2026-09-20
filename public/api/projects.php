@@ -22,7 +22,7 @@ if (!is_array($data)) JsonResponse::send(['error'=>'INVALID_JSON'],400);
 try {
     if ($method==='POST' || $method==='PUT') {
         $project=$registry->upsert($data);
-        (new AuditLog())->write('PROJECT_UPSERT',['project'=>$project['id'],'repo'=>$project['repo']],$user);
+        (new AuditLog())->write('PROJECT_UPSERT',['project'=>$project['id'],'repo'=>$project['repo'],'targetId'=>$project['targetId']??'local'],$user);
         JsonResponse::send(['ok'=>true,'project'=>$project]);
     }
     if ($method==='DELETE') {
