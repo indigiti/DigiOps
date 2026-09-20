@@ -199,5 +199,17 @@ try {
         'sourceUpdateAvailable'=>$sourceUpdate,
     ]);
 } catch (Throwable $e) {
-    JsonResponse::send(['error'=>$e->getMessage()],400);
+    $error=$e->getMessage();
+    $stage=null;
+    if (preg_match('/^GITHUB_([A-Z]+)_(?:HTTP_\\d{3}|FAILED)$/', $error, $match)) {
+        $stage=strtolower($match[1]);
+    }
+    JsonResponse::send([
+        'error'=>$error,
+        'github'=>[
+            'stage'=>$stage,
+            'repository'=>isset($project['repo']) ? $project['repo'] : null,
+            'branch'=>isset($project['branch']) ? $project['branch'] : null,
+        ],
+    ],400);
 }
