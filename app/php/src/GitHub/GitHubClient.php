@@ -68,7 +68,7 @@ final class GitHubClient
     private function contextualize(string $stage, RuntimeException $e): RuntimeException
     {
         $message = $e->getMessage();
-        if (preg_match('/^GITHUB_HTTP_(\\d{3})(?::.*)?$/', $message, $match)) {
+        if (preg_match('/^GITHUB_HTTP_(\d{3})(?::.*)?$/', $message, $match)) {
             return new RuntimeException('GITHUB_' . $stage . '_HTTP_' . $match[1], 0, $e);
         }
         return new RuntimeException('GITHUB_' . $stage . '_FAILED', 0, $e);
