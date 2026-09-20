@@ -21,7 +21,13 @@ const renderNativePathPreview=()=>{
 const api=async(url,options={})=>{
   const target=String(url||'').startsWith('./')?appUrl(String(url).slice(2)):url
   const res=await fetch(target,{credentials:'same-origin',cache:'no-store',...options})
-  const data=await res.json().catch(()=>({error:'INVALID_RESPONSE'}))
+  const raw=await res.text()
+  let data=null
+  try{data=raw?JSON.parse(raw):{}}
+  catch{
+    const type=(res.headers.get('content-type')||'unknown').split(';')[0].replace(/[^a-z0-9.+/-]/gi,'_')
+    throw new Error('INVALID_RESPONSE_HTTP_'+res.status+'_TYPE_'+type+'_BYTES_'+raw.length)
+  }
   if(!res.ok) throw new Error(data.error||('HTTP_'+res.status))
   return data
 }
