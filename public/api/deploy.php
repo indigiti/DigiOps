@@ -2,6 +2,11 @@
 declare(strict_types=1);
 require_once __DIR__ . '/_bootstrap.php';
 
+@set_time_limit(300);
+@ignore_user_abort(true);
+header('Cache-Control: no-store, private');
+header('X-Accel-Buffering: no');
+
 use DigiOps\Deploy\ReleaseManager;
 use DigiOps\Audit\AuditLog;
 use DigiOps\GitHub\GitHubClient;

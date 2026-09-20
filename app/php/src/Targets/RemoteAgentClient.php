@@ -29,13 +29,18 @@ final class RemoteAgentClient
         $url=rtrim((string)$target['endpoint'],'/');
 
         $started=microtime(true);
+        $timeout=match($action){
+            'deploy-commit','rollback'=>150,
+            'deploy-chunk'=>45,
+            default=>30,
+        };
         $ch=curl_init($url);
         curl_setopt_array($ch,[
             CURLOPT_RETURNTRANSFER=>true,
             CURLOPT_POST=>true,
             CURLOPT_POSTFIELDS=>$body,
             CURLOPT_CONNECTTIMEOUT=>5,
-            CURLOPT_TIMEOUT=>30,
+            CURLOPT_TIMEOUT=>$timeout,
             CURLOPT_FOLLOWLOCATION=>false,
             CURLOPT_HTTPHEADER=>[
                 'Content-Type: application/json',
@@ -54,7 +59,12 @@ final class RemoteAgentClient
 
         if($raw===false) throw new RuntimeException('TARGET_CONNECT_FAILED_'.$errno.($error?':'.$error:''));
         $data=json_decode((string)$raw,true);
-        if(!is_array($data)) throw new RuntimeException('TARGET_INVALID_RESPONSE');
+        if(!is_array($data)){
+            $contentType='';
+            if(function_exists('curl_getinfo')){$contentType='';}
+            $safeType=preg_replace('/[^A-Za-z0-9._+\/-]/','_',trim((string)($status?($status):0)));
+            throw new RuntimeException('TARGET_INVALID_RESPONSE_HTTP_'.$status.'_BYTES_'.strlen((string)$raw));
+        }
         if($status<200 || $status>=300 || !($data['ok']??false)){
             throw new RuntimeException((string)($data['error']??('TARGET_HTTP_'.$status)));
         }
