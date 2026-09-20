@@ -24,3 +24,17 @@ $failed=false;
 try { PathGuard::slug('Bad Slug'); } catch(Throwable) { $failed=true; }
 assert($failed===true);
 echo "PathGuardTest PASS\n";
+
+
+assert(PathGuard::targetRelative('public_html/', 'public') === 'public_html/');
+assert(PathGuard::targetRelative('private_html/', 'private') === 'private_html/');
+assert(PathGuard::targetRelative('public_html/app/', 'public') === 'public_html/app/');
+assert(PathGuard::targetRelative('private_html/app/cache/', 'private') === 'private_html/app/cache/');
+
+$remoteRejected = false;
+try { PathGuard::targetRelative('../public_html/', 'public'); } catch (Throwable) { $remoteRejected = true; }
+assert($remoteRejected === true);
+
+$remoteRejected = false;
+try { PathGuard::targetRelative('private_html/app/', 'public'); } catch (Throwable) { $remoteRejected = true; }
+assert($remoteRejected === true);
