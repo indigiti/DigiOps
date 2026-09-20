@@ -21,6 +21,7 @@ jobs:
       - run: node tools/check-pretty-routes.mjs
       - run: npm run build
       - run: php tools/package-release.php
+      - run: php tools/check-release-package.php
       - uses: actions/upload-artifact@v4
         with:
           name: digiops-release
