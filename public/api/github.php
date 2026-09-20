@@ -201,7 +201,7 @@ try {
 } catch (Throwable $e) {
     $error=$e->getMessage();
     $stage=null;
-    if (preg_match('/^GITHUB_([A-Z]+)_(?:HTTP_\\d{3}|FAILED)$/', $error, $match)) {
+    if (preg_match('/^GITHUB_([A-Z]+)_(?:HTTP_\d{3}|FAILED)$/', $error, $match)) {
         $stage=strtolower($match[1]);
     }
     JsonResponse::send([
