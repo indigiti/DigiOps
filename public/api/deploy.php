@@ -5,6 +5,7 @@ require_once __DIR__ . '/_bootstrap.php';
 use DigiOps\Deploy\ReleaseManager;
 use DigiOps\Audit\AuditLog;
 use DigiOps\GitHub\GitHubClient;
+use DigiOps\GitHub\DeploymentCandidateResolver;
 use DigiOps\Registry\ProjectRegistry;
 use DigiOps\Security\SecretVault;
 use DigiOps\Security\Session;
@@ -31,21 +32,35 @@ try {
     $artifactId=(int)($data['artifactId']??0);
     $commit=(string)($data['commit']??'');
     if ($artifactId<=0) {
-        if ($runId<=0) {
-            $runs=$client->workflowRuns($project['repo'],$project['branch'],20)['workflow_runs']??[];
+        if ($runId>0) {
+            $artifacts=$client->artifacts($project['repo'],$runId)['artifacts']??[];
+            $wanted=$project['artifactName'] ?: 'digiops-release';
             $match=null;
-            foreach ($runs as $run) if (($run['status']??'')==='completed' && ($run['conclusion']??'')==='success') { $match=$run; break; }
-            if (!$match) throw new RuntimeException('NO_SUCCESSFUL_WORKFLOW_RUN');
-            $runId=(int)$match['id'];
-            $commit=(string)($match['head_sha']??$commit);
+            foreach ($artifacts as $artifact) {
+                if (($artifact['name']??'')===$wanted && !($artifact['expired']??false)) { $match=$artifact; break; }
+            }
+            if (!$match) {
+                $active=array_values(array_filter($artifacts,fn($a)=>is_array($a)&&!($a['expired']??false)));
+                if (count($active)===1) $match=$active[0];
+            }
+            if (!$match) throw new RuntimeException('DEPLOY_ARTIFACT_NOT_FOUND');
+            $artifactId=(int)$match['id'];
+        } else {
+            $runs=$client->workflowRuns($project['repo'],$project['branch'],20)['workflow_runs']??[];
+            $resolved=DeploymentCandidateResolver::resolve(
+                $runs,
+                (string)($project['artifactName'] ?: 'digiops-release'),
+                fn(int $id): array => $client->artifacts($project['repo'],$id),
+                10
+            );
+            $match=$resolved['artifact']??null;
+            $matchedRun=$resolved['run']??null;
+            if (!$matchedRun) throw new RuntimeException('NO_SUCCESSFUL_WORKFLOW_RUN');
+            if (!$match) throw new RuntimeException('DEPLOY_ARTIFACT_NOT_FOUND');
+            $runId=(int)($matchedRun['id']??0);
+            $artifactId=(int)($match['id']??0);
+            $commit=(string)($matchedRun['head_sha']??$commit);
         }
-        $artifacts=$client->artifacts($project['repo'],$runId)['artifacts']??[];
-        $wanted=$project['artifactName'] ?: 'digiops-release';
-        $match=null;
-        foreach ($artifacts as $artifact) if (($artifact['name']??'')===$wanted && !($artifact['expired']??false)) { $match=$artifact; break; }
-        if (!$match && count($artifacts)===1) $match=$artifacts[0];
-        if (!$match) throw new RuntimeException('DEPLOY_ARTIFACT_NOT_FOUND');
-        $artifactId=(int)$match['id'];
     }
 
     Files::ensureDir(DIGIOPS_PRIVATE_ROOT . '/tmp');
