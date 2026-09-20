@@ -28,6 +28,7 @@ function app(){
     ready:false, installed:false, user:null, csrf:null, authMode:'login',
     sidebarOpen:false, page:'dashboard', projectTab:'overview', query:'', filter:'all',
     projects:[], selectedId:null, releases:[], githubInfo:null, fileListing:null, health:null, audit:[],
+    detailCache:{github:{},releases:{},health:{},files:{}}, requestPool:{},
     modal:null, busy:false, notice:'', error:'', operationTimer:null,
     operation:{active:false,type:'',title:'',message:'',percent:0,status:'idle',estimated:false},
     login:{username:'',password:'',totp:''},
@@ -56,6 +57,35 @@ function app(){
       finally{this.ready=true;icons()}
     },
     clearMessages(){this.notice='';this.error=''},
+    cacheGet(bucket,key,ttlMs){
+      const group=this.detailCache[bucket]||{}
+      const entry=group[key]
+      if(!entry)return null
+      if(ttlMs>0 && (Date.now()-entry.time)>ttlMs)return null
+      return entry.value
+    },
+    cachePut(bucket,key,value){
+      if(!this.detailCache[bucket])this.detailCache[bucket]={}
+      this.detailCache[bucket][key]={time:Date.now(),value}
+      return value
+    },
+    cacheDropProject(id){
+      for(const bucket of ['github','releases','health']){
+        if(this.detailCache[bucket])delete this.detailCache[bucket][id]
+      }
+      if(this.detailCache.files){
+        for(const key of Object.keys(this.detailCache.files)){
+          if(key.startsWith(id+'|'))delete this.detailCache.files[key]
+        }
+      }
+    },
+    async singleFlight(key,loader){
+      if(this.requestPool[key])return this.requestPool[key]
+      const promise=Promise.resolve().then(loader)
+      this.requestPool[key]=promise
+      try{return await promise}
+      finally{delete this.requestPool[key]}
+    },
     async doInstall(){
       this.clearMessages()
       if(this.install.password!==this.install.confirm){this.error='PASSWORD_CONFIRM_MISMATCH';return}
@@ -135,7 +165,7 @@ function app(){
     get deployedRelease(){return this.deployedInfo && this.deployedInfo.release ? this.deployedInfo.release : (this.selected ? this.selected.release : 'Not deployed')},
     get deployedLastDeploy(){return this.deployedInfo && this.deployedInfo.lastDeploy ? this.deployedInfo.lastDeploy : (this.selected ? this.selected.lastDeploy : 'Never')},
     get deployableStatusText(){
-      if(!this.githubInfo)return 'Checking GitHub…'
+      if(!this.githubInfo)return 'Not checked yet — use Check update when you need fresh deployment data.'
       if(!this.githubConnected)return 'GitHub not connected'
       if(!this.candidateReady)return 'No deployable artifact: '+this.candidateReason
       if(this.candidate.alreadyDeployed)return 'Latest successful artifact is already deployed'
@@ -217,7 +247,7 @@ function app(){
       return run.conclusion || run.status || 'None'
     },
     get updateMessage(){
-      if(!this.githubInfo)return 'Checking…'
+      if(!this.githubInfo)return 'Not checked yet. No GitHub request is made when the application opens.'
       if(this.githubNeedsConnection)return 'Connect GitHub to check repository updates.'
       return this.githubInfo.updateAvailable ? 'New commit available.' : 'No newer commit detected.'
     },
@@ -238,8 +268,15 @@ function app(){
     auditHashPrefix(a){return a && a.hash ? String(a.hash).slice(0,12) : ''},
     go(page){this.page=page;this.sidebarOpen=false;this.clearMessages();if(page==='audit')this.loadAudit();if(page==='settings'){this.loadInfrastructure();this.loadRuntimeInfo()}icons()},
     async openProject(id){
-      this.selectedId=id;this.page='project';this.projectTab='overview';this.githubInfo=null;this.releases=[];this.fileListing=null;this.health=null;this.sidebarOpen=false;icons()
-      await Promise.allSettled([this.loadGithubInfo(),this.loadReleases()])
+      this.selectedId=id
+      this.page='project'
+      this.projectTab='overview'
+      this.githubInfo=this.cacheGet('github',id,120000)
+      this.releases=this.cacheGet('releases',id,300000)||[]
+      this.health=this.cacheGet('health',id,60000)
+      this.fileListing=null
+      this.sidebarOpen=false
+      icons()
     },
     normalizeSlug(value){
       return String(value||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')
@@ -288,10 +325,9 @@ function app(){
       this.startOperation('update','Checking for updates','Connecting to GitHub and reading branch state…',12,false)
       try{
         this.setOperation(28,'Reading workflow runs and artifacts…')
-        const ok=await this.loadGithubInfo()
+        const ok=await this.loadGithubInfo(true)
         if(!ok)throw new Error(this.githubError||'UPDATE_CHECK_FAILED')
         this.setOperation(82,'Comparing deployed commit with the latest successful artifact…')
-        await this.loadProjects()
         this.setOperation(96,'Refreshing deployment candidate details…')
         this.notice=this.githubInfo && this.githubInfo.updateAvailable ? 'Update available and deployment candidate refreshed.' : 'Application is already on the latest deployable build.'
         this.completeOperation('Update check complete.')
@@ -299,10 +335,18 @@ function app(){
         this.error=e.message;this.failOperation('Update check failed: '+e.message)
       }finally{this.busy=false;icons()}
     },
-    async loadGithubInfo(){
+    async loadGithubInfo(force=false){
       if(!this.selected)return false
+      const id=this.selected.id
+      const cached=!force?this.cacheGet('github',id,120000):null
+      if(cached){
+        this.githubInfo=cached
+        icons()
+        return true
+      }
       try{
-        this.githubInfo=await api('./api/github.php?project='+encodeURIComponent(this.selected.id))
+        const data=await this.singleFlight('github:'+id,()=>api('./api/github.php?project='+encodeURIComponent(id)))
+        this.githubInfo=this.cachePut('github',id,data)
         await this.loadProjects()
         icons()
         return true
@@ -312,9 +356,19 @@ function app(){
         return false
       }
     },
-    async loadReleases(){
+    async loadReleases(force=false){
       if(!this.selected)return
-      try{const d=await api('./api/releases.php?project='+encodeURIComponent(this.selected.id));this.releases=d.releases||[]}catch(e){this.error=e.message}
+      const id=this.selected.id
+      const cached=!force?this.cacheGet('releases',id,300000):null
+      if(cached){
+        this.releases=cached
+        icons()
+        return
+      }
+      try{
+        const d=await this.singleFlight('releases:'+id,()=>api('./api/releases.php?project='+encodeURIComponent(id)))
+        this.releases=this.cachePut('releases',id,d.releases||[])
+      }catch(e){this.error=e.message}
       icons()
     },
     async deploy(){
@@ -349,9 +403,10 @@ function app(){
           commit:this.candidateCommitSha==='—'?'':this.candidateCommitSha
         })})
         this.setOperation(94,'Deployment published. Refreshing application registry…')
+        this.cacheDropProject(this.selected.id)
         await this.loadProjects()
         this.setOperation(97,'Refreshing release history…')
-        await this.loadReleases()
+        await this.loadReleases(true)
         this.setOperation(99,'Running post-deploy health check…')
         await this.checkHealth(true)
         this.notice='Deployed release '+d.release
@@ -373,7 +428,8 @@ function app(){
       try{
         await api('./api/rollback.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id,release})})
         this.setOperation(94,'Rollback published. Refreshing state…')
-        await this.loadProjects();await this.loadReleases()
+        this.cacheDropProject(this.selected.id)
+        await this.loadProjects();await this.loadReleases(true)
         this.setOperation(98,'Running health check…')
         await this.checkHealth(true)
         this.notice='Rollback complete.'
@@ -389,7 +445,8 @@ function app(){
         this.startOperation('health','Running health check','Checking HTTP, storage and runtime status…',20,false)
       }
       try{
-        this.health=await api('./api/health.php?project='+encodeURIComponent(this.selected.id))
+        this.health=await this.singleFlight('health:'+this.selected.id,()=>api('./api/health.php?project='+encodeURIComponent(this.selected.id)))
+        this.cachePut('health',this.selected.id,this.health)
         if(!silent)this.setOperation(78,'Refreshing application health state…')
         await this.loadProjects()
         if(!silent){
@@ -405,12 +462,20 @@ function app(){
         icons()
       }
     },
-    async browse(scope='public',path=''){
+    async browse(scope='public',path='',force=false){
       if(!this.selected)return
       this.clearMessages()
+      const id=this.selected.id
+      const cacheKey=id+'|'+scope+'|'+path
+      const cached=!force?this.cacheGet('files',cacheKey,120000):null
+      if(cached){
+        this.fileListing=cached
+        icons()
+        return
+      }
       try{
-        const d=await api('./api/files.php?project='+encodeURIComponent(this.selected.id)+'&scope='+encodeURIComponent(scope)+'&path='+encodeURIComponent(path))
-        this.fileListing={scope,...d.listing}
+        const d=await this.singleFlight('files:'+cacheKey,()=>api('./api/files.php?project='+encodeURIComponent(id)+'&scope='+encodeURIComponent(scope)+'&path='+encodeURIComponent(path)))
+        this.fileListing=this.cachePut('files',cacheKey,{scope,...d.listing})
       }catch(e){this.error=e.message}
       icons()
     },
@@ -470,10 +535,8 @@ function app(){
     },
     setTab(tab){
       this.projectTab=tab
-      if(tab==='deploy')this.loadGithubInfo()
-      if(tab==='releases')this.loadReleases()
-      if(tab==='files')this.browse('public','')
-      if(tab==='health')this.checkHealth()
+      if(tab==='releases' && this.releases.length===0)this.loadReleases(false)
+      if(tab==='files' && !this.fileListing)this.browse('public','',false)
       icons()
     }
   }
@@ -556,7 +619,7 @@ document.querySelector('#app').innerHTML=`
           <div class="mb-5 flex gap-6 overflow-x-auto border-b border-slate-200"><template x-for="t in ['overview','deploy','releases','files','health','settings']"><button @click="setTab(t)" class="tab capitalize" :class="projectTab===t?'active':''" x-text="t"></button></template></div>
           <div x-show="projectTab==='overview'" class="grid gap-5 xl:grid-cols-[1.4fr_.8fr]">
             <div class="panel"><h2 class="font-bold">Deployment configuration</h2><div class="row"><span><b class="block text-sm">Public URL</b><small class="text-slate-500">Browser route</small></span><code x-text="selectedUrl"></code></div><div class="row"><span><b class="block text-sm">Public folder</b><small class="text-slate-500">Release payload only</small></span><code class="text-xs" x-text="selectedPublicPath"></code></div><div class="row"><span><b class="block text-sm">Private folder</b><small class="text-slate-500">Runtime and metadata</small></span><code class="text-xs" x-text="selectedPrivatePath"></code></div><div class="row"><span><b class="block text-sm">Current commit</b></span><code x-text="selectedCommit"></code></div></div>
-            <div class="space-y-5"><div class="panel"><h2 class="font-bold">GitHub</h2><p class="muted mt-1" x-show="!githubInfo">Checking…</p><div x-show="githubConnected"><div class="mt-4 flex items-center gap-2 text-sm"><i data-lucide="check-circle-2" class="h-4 w-4 text-emerald-600"></i>Connected</div><div class="mt-4 text-sm"><span class="text-slate-500">Latest workflow</span><b class="mt-1 block" x-text="latestWorkflowStatus"></b></div></div><p x-show="githubError" class="mt-3 text-sm text-rose-600" x-text="githubError"></p></div><div class="panel"><h2 class="font-bold">Update</h2><p class="muted mt-2" x-text="updateMessage"></p></div></div>
+            <div class="space-y-5"><div class="panel"><h2 class="font-bold">GitHub</h2><p class="muted mt-1" x-show="!githubInfo">Not checked yet. DigiOps does not query GitHub just by opening this application.</p><div x-show="githubConnected"><div class="mt-4 flex items-center gap-2 text-sm"><i data-lucide="check-circle-2" class="h-4 w-4 text-emerald-600"></i>Connected</div><div class="mt-4 text-sm"><span class="text-slate-500">Latest workflow</span><b class="mt-1 block" x-text="latestWorkflowStatus"></b></div></div><p x-show="githubError" class="mt-3 text-sm text-rose-600" x-text="githubError"></p></div><div class="panel"><h2 class="font-bold">Update</h2><p class="muted mt-2" x-text="updateMessage"></p><div class="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">Performance mode: GitHub, health, releases and files are loaded on demand and cached per application for this session.</div></div></div>
           </div>
           <div x-show="projectTab==='deploy'" class="space-y-5">
             <div x-show="githubNeedsConnection" class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"><b>GitHub connection required.</b> Connect a GitHub token before checking workflows or deploying artifacts. <button type="button" @click="go('settings')" class="ml-2 font-semibold underline">Open Connections</button></div>
