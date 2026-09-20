@@ -27,6 +27,28 @@ jobs:
           name: digiops-release
           path: release/
           if-no-files-found: error
+          include-hidden-files: true
+
+  artifact-certification:
+    runs-on: ubuntu-latest
+    needs: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: digiops-release
+          path: verified-release
+      - name: Verify uploaded artifact
+        run: |
+          test -f verified-release/index.html
+          test -f verified-release/.htaccess
+          test -f verified-release/api/session.php
+          test -f verified-release/../verified-release/.htaccess
+          grep -F "RewriteBase /digiops/" verified-release/.htaccess
+          grep -F "RewriteRule ^api/ - [L]" verified-release/.htaccess
+          grep -F "RewriteRule ^ index.html [L]" verified-release/.htaccess
+          test -f verified-release/../verified-release/index.html
+          echo "Uploaded artifact certification: PASS"
 
   php:
     runs-on: ubuntu-latest
