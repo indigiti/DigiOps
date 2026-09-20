@@ -12,7 +12,24 @@ function appHome(): string { $env=trim((string)getenv('DIGIOPS_AGENT_HOME')); if
 function runtimeRoot(): string { return appHome().'/private_html/digiops-agent'; }
 function ensureDir(string $dir,int $mode=0750): void { if(is_dir($dir))return; if(!mkdir($dir,$mode,true)&&!is_dir($dir))fail('DIRECTORY_CREATE_FAILED',500); }
 function removeTree(string $path): void { if(!file_exists($path)&&!is_link($path))return; if(is_file($path)||is_link($path)){@unlink($path);return;} foreach(array_diff(scandir($path)?:[],['.','..']) as $n)removeTree($path.'/'.$n); @rmdir($path); }
-function copyDir(string $src,string $dst): void { ensureDir($dst); foreach(array_diff(scandir($src)?:[],['.','..']) as $n){$s=$src.'/'.$n;$d=$dst.'/'.$n;if(is_link($s))fail('SYMLINK_NOT_ALLOWED');if(is_dir($s))copyDir($s,$d);elseif(!copy($s,$d))fail('COPY_FAILED',500);} }
+function copyFileAtomic(string $src,string $dst): void {
+    if(is_link($src))fail('SYMLINK_NOT_ALLOWED');
+    ensureDir(dirname($dst));
+    if(is_link($dst))fail('TARGET_SYMLINK_NOT_ALLOWED');
+    $tmp=dirname($dst).'/.'.basename($dst).'.digiops-'.bin2hex(random_bytes(4));
+    if(!@copy($src,$tmp)){@unlink($tmp);fail('COPY_FAILED',500);}
+    $mode=@fileperms($src);if(is_int($mode))@chmod($tmp,$mode&0777);
+    if(!@rename($tmp,$dst)){@unlink($tmp);fail('ATOMIC_REPLACE_FAILED',500);}
+}
+function copyDir(string $src,string $dst): void {
+    ensureDir($dst);
+    foreach(array_diff(scandir($src)?:[],['.','..']) as $n){
+        $s=$src.'/'.$n;$d=$dst.'/'.$n;
+        if(is_link($s))fail('SYMLINK_NOT_ALLOWED');
+        if(is_dir($s))copyDir($s,$d);
+        else copyFileAtomic($s,$d);
+    }
+}
 function dirSize(string $dir): int { if(!is_dir($dir))return 0;$sum=0;$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir,FilesystemIterator::SKIP_DOTS));foreach($it as $f)if($f->isFile()&&!$f->isLink())$sum+=$f->getSize();return $sum; }
 function safeSlug(string $value): string { $v=strtolower(trim($value)); if(!preg_match('/^[a-z0-9][a-z0-9._-]{1,79}$/',$v))fail('INVALID_PROJECT_SLUG'); return $v; }
 function safeRelative(string $path): string { $p=trim(str_replace('\\','/',$path),'/'); if($p===''||str_contains($p,'..')||!preg_match('#^[A-Za-z0-9._/-]+$#',$p))fail('INVALID_RELATIVE_PATH'); return $p; }
