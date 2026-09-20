@@ -583,7 +583,7 @@ function app(){
           this.cacheDropProject(this.selected.id)
           for(let attempt=1;attempt<=5 && !reconciled;attempt++){
             try{
-              const status=await api('./api/deploy-status.php?project='+encodeURIComponent(this.selected.id)+'&commit='+encodeURIComponent(requestedCommit))
+              const status=await api('./api/deploy-status.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id,commit:requestedCommit})})
               if(status && status.state==='deployed'){
                 reconciled=true
                 break
