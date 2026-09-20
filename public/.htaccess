@@ -1,0 +1,14 @@
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteBase /digiops/
+
+# API requests and real files/directories must never enter the SPA router.
+RewriteRule ^api/ - [L]
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Pretty URL SPA fallback:
+# /digiops/apps/{slug}/deploy -> /digiops/index.html
+RewriteRule ^ index.html [L]
+</IfModule>

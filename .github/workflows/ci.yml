@@ -18,6 +18,7 @@ jobs:
           node-version: 22
       - run: npm install
       - run: npm run check:csp
+      - run: node tools/check-pretty-routes.mjs
       - run: npm run build
       - run: php tools/package-release.php
       - uses: actions/upload-artifact@v4

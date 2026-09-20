@@ -5,6 +5,8 @@ import './styles.css'
 window.Alpine = Alpine
 const ICONS={Activity,AppWindow,ArrowLeft,Boxes,CheckCircle2,ChevronDown,CircleGauge,Cloud,FileClock,FileText,FolderGit2,GitBranch,Github,Globe2,HardDrive,HeartPulse,History,LayoutDashboard,ListFilter,LockKeyhole,LogOut,Menu,MoreVertical,PackageCheck,Plus,RefreshCw,Rocket,Search,Server,Settings2,ShieldCheck,UserRound,X,Zap}
 const icons=()=>queueMicrotask(()=>createIcons({icons:ICONS}))
+const APP_BASE=(import.meta.env.BASE_URL||'/digiops/').replace(/\/+$/,'')+'/'
+const appUrl=(path='')=>APP_BASE+String(path||'').replace(/^\/+/,'')
 
 const renderNativePathPreview=()=>{
   const slugInput=document.getElementById('digiops-app-slug')
@@ -17,7 +19,8 @@ const renderNativePathPreview=()=>{
 }
 
 const api=async(url,options={})=>{
-  const res=await fetch(url,{credentials:'same-origin',cache:'no-store',...options})
+  const target=String(url||'').startsWith('./')?appUrl(String(url).slice(2)):url
+  const res=await fetch(target,{credentials:'same-origin',cache:'no-store',...options})
   const data=await res.json().catch(()=>({error:'INVALID_RESPONSE'}))
   if(!res.ok) throw new Error(data.error||('HTTP_'+res.status))
   return data
@@ -26,7 +29,7 @@ const api=async(url,options={})=>{
 function app(){
   return {
     ready:false, installed:false, user:null, csrf:null, authMode:'login',
-    sidebarOpen:false, page:'dashboard', projectTab:'overview', query:'', filter:'all',
+    sidebarOpen:false, page:'dashboard', projectTab:'overview', query:'', filter:'all', routeReady:false,
     projects:[], targets:[], selectedId:null, releases:[], githubInfo:null, fileListing:null, health:null, audit:[],
     detailCache:{github:{},releases:{},health:{},files:{}}, requestPool:{},
     modal:null, busy:false, notice:'', error:'', operationTimer:null,
@@ -44,6 +47,9 @@ function app(){
 
     async init(){
       await this.bootstrap()
+      window.addEventListener('popstate',()=>this.applyRoute(window.location.pathname,false))
+      if(this.user) await this.applyRoute(window.location.pathname,true)
+      this.routeReady=true
       icons()
     },
     async bootstrap(){
@@ -103,14 +109,14 @@ function app(){
       try{
         const d=await api('./api/login.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(this.login)})
         this.user=d.user;this.csrf=d.csrf;this.login.password='';this.notice='Signed in.'
-        await this.loadProjects()
+        await this.loadProjects();await this.loadTargets();await this.applyRoute(window.location.pathname,true)
       }catch(e){this.error=e.message}
       finally{this.busy=false;icons()}
     },
     async logout(){
       this.clearMessages()
       try{await api('./api/logout.php',{method:'POST',headers:{'X-CSRF-Token':this.csrf}})}catch{}
-      this.user=null;this.csrf=null;this.projects=[];this.page='dashboard';icons()
+      this.user=null;this.csrf=null;this.projects=[];this.page='dashboard';history.replaceState({},'',APP_BASE);icons()
     },
     async loadProjects(){
       const d=await api('./api/projects.php');this.projects=d.projects||[];icons()
@@ -123,7 +129,38 @@ function app(){
       icons()
     },
     get stats(){
-      return {total:this.projects.length,updates:this.projects.filter(p=>p.update).length,healthy:this.projects.filter(p=>p.health==='healthy').length,attention:this.projects.filter(p=>p.health==='attention').length}
+      return {
+        total:this.projects.length,
+        updates:this.projects.filter(p=>p.update).length,
+        healthy:this.projects.filter(p=>p.health==='healthy').length,
+        attention:this.projects.filter(p=>p.health==='attention').length,
+        pending:this.projects.filter(p=>!p.health||p.health==='pending').length,
+        targets:this.targets.length,
+        remoteTargets:this.targets.filter(t=>t.id!=='local').length
+      }
+    },
+    get attentionProjects(){
+      return this.projects
+        .filter(p=>p.health==='attention'||p.update)
+        .sort((a,b)=>(Number(b.health==='attention')-Number(a.health==='attention'))||(Number(b.update)-Number(a.update)))
+        .slice(0,8)
+    },
+    get targetSummaries(){
+      return this.targets.map(t=>{
+        const apps=this.projects.filter(p=>(p.targetId||'local')===t.id)
+        return {
+          id:t.id,name:t.name,status:t.status||'unverified',apps:apps.length,
+          healthy:apps.filter(p=>p.health==='healthy').length,
+          attention:apps.filter(p=>p.health==='attention').length
+        }
+      }).sort((a,b)=>b.apps-a.apps)
+    },
+    get recentDeployments(){
+      return this.projects
+        .filter(p=>p.lastDeploy&&p.lastDeploy!=='Never')
+        .slice()
+        .sort((a,b)=>new Date(b.lastDeploy)-new Date(a.lastDeploy))
+        .slice(0,6)
     },
     get filteredProjects(){
       const q=this.query.trim().toLowerCase()
@@ -276,17 +313,79 @@ function app(){
       return this.health && this.health.runtime && this.health.runtime.php ? 'PHP '+this.health.runtime.php : 'Not checked'
     },
     auditHashPrefix(a){return a && a.hash ? String(a.hash).slice(0,12) : ''},
-    go(page){this.page=page;this.sidebarOpen=false;this.clearMessages();if(page==='audit')this.loadAudit();if(page==='settings'){this.loadInfrastructure();this.loadRuntimeInfo()}if(page==='targets')this.loadTargets();icons()},
-    async openProject(id){
-      this.selectedId=id
-      this.page='project'
-      this.projectTab='overview'
-      this.githubInfo=this.cacheGet('github',id,120000)
-      this.releases=this.cacheGet('releases',id,300000)||[]
-      this.health=this.cacheGet('health',id,60000)
-      this.fileListing=null
+    appUrl(path=''){return appUrl(path)},
+    routePath(){
+      const raw=window.location.pathname
+      const base=APP_BASE.replace(/\/$/,'')
+      if(raw===base||raw===base+'/')return ''
+      if(raw.startsWith(base+'/'))return raw.slice(base.length+1)
+      return ''
+    },
+    routeFor(page,id='',tab='overview'){
+      if(page==='dashboard')return ''
+      if(page==='projects')return 'apps'
+      if(page==='targets')return 'targets'
+      if(page==='audit')return 'audit'
+      if(page==='settings')return 'settings'
+      if(page==='project'&&id){
+        return 'apps/'+encodeURIComponent(id)+(tab&&tab!=='overview'?'/'+encodeURIComponent(tab):'')
+      }
+      return ''
+    },
+    async navigateRoute(path,replace=false){
+      const url=appUrl(path)
+      if(replace)history.replaceState({},'',url)
+      else if(window.location.pathname!==new URL(url,window.location.origin).pathname)history.pushState({},'',url)
+      await this.applyRoute(new URL(url,window.location.origin).pathname,false)
+    },
+    async applyRoute(pathname,replaceInvalid=false){
+      const base=APP_BASE.replace(/\/$/,'')
+      let relative=''
+      if(pathname===base||pathname===base+'/')relative=''
+      else if(pathname.startsWith(base+'/'))relative=pathname.slice(base.length+1)
+      else {
+        if(replaceInvalid)history.replaceState({},'',APP_BASE)
+        relative=''
+      }
+      const parts=relative.split('/').filter(Boolean).map(v=>decodeURIComponent(v))
+      this.clearMessages()
       this.sidebarOpen=false
+      if(parts.length===0){
+        this.page='dashboard';this.selectedId=null;this.projectTab='overview';icons();return
+      }
+      if(parts[0]==='apps'&&parts.length===1){
+        this.page='projects';this.selectedId=null;this.projectTab='overview';icons();return
+      }
+      if(parts[0]==='apps'&&parts[1]){
+        const project=this.projects.find(p=>p.id===parts[1])
+        const allowed=['overview','deploy','releases','files','health','settings']
+        const tab=parts[2]&&allowed.includes(parts[2])?parts[2]:'overview'
+        if(!project){
+          this.page='projects';this.selectedId=null;this.projectTab='overview'
+          if(replaceInvalid)history.replaceState({},'',appUrl('apps'))
+          icons();return
+        }
+        this.selectedId=project.id;this.page='project';this.projectTab=tab
+        this.githubInfo=this.cacheGet('github',project.id,120000)
+        this.releases=this.cacheGet('releases',project.id,300000)||[]
+        this.health=this.cacheGet('health',project.id,60000)
+        this.fileListing=null
+        if(tab==='releases'&&this.releases.length===0)this.loadReleases(false)
+        if(tab==='files'&&!this.fileListing)this.browse('public','',false)
+        icons();return
+      }
+      if(parts[0]==='targets'&&this.userRole==='admin'){this.page='targets';this.selectedId=null;await this.loadTargets();icons();return}
+      if(parts[0]==='audit'&&this.userRole==='admin'){this.page='audit';this.selectedId=null;await this.loadAudit();icons();return}
+      if(parts[0]==='settings'){this.page='settings';this.selectedId=null;await Promise.allSettled([this.loadInfrastructure(),this.loadRuntimeInfo()]);icons();return}
+      this.page='dashboard';this.selectedId=null;this.projectTab='overview'
+      if(replaceInvalid)history.replaceState({},'',APP_BASE)
       icons()
+    },
+    async go(page){
+      await this.navigateRoute(this.routeFor(page))
+    },
+    async openProject(id){
+      await this.navigateRoute(this.routeFor('project',id,'overview'))
     },
     normalizeSlug(value){
       return String(value||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')
@@ -606,11 +705,9 @@ function app(){
       }catch(e){this.error=e.message}
       finally{this.busy=false;icons()}
     },
-    setTab(tab){
-      this.projectTab=tab
-      if(tab==='releases' && this.releases.length===0)this.loadReleases(false)
-      if(tab==='files' && !this.fileListing)this.browse('public','',false)
-      icons()
+    async setTab(tab){
+      if(!this.selected)return
+      await this.navigateRoute(this.routeFor('project',this.selected.id,tab))
     }
   }
 }
@@ -643,7 +740,7 @@ document.querySelector('#app').innerHTML=`
   <div x-show="ready && user" class="app-frame flex">
     <div x-show="sidebarOpen" @click="sidebarOpen=false" class="fixed inset-0 z-40 bg-slate-950/20 lg:hidden"></div>
     <aside class="sidebar" :class="sidebarOpen?'open':''">
-      <div class="mb-7 flex items-center gap-3 px-2"><div class="brand-mark"><i data-lucide="zap"></i></div><div><div class="font-bold">DigiOps</div><div class="text-xs text-slate-500">Stage Operations</div></div><button @click="sidebarOpen=false" class="ml-auto lg:hidden"><i data-lucide="x"></i></button></div>
+      <div class="mb-7 flex items-center gap-3 px-2"><div class="brand-mark"><i data-lucide="zap"></i></div><div><div class="font-bold">DigiOps</div><div class="text-xs text-slate-500">Control Plane</div></div><button @click="sidebarOpen=false" class="ml-auto lg:hidden"><i data-lucide="x"></i></button></div>
       <div class="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Workspace</div>
       <button @click="go('dashboard')" class="side-link" :class="page==='dashboard'?'active':''"><i data-lucide="layout-dashboard"></i>Dashboard</button>
       <button @click="go('projects')" class="side-link" :class="['projects','project'].includes(page)?'active':''"><i data-lucide="folder-git-2"></i>Applications<span class="ml-auto rounded-full bg-slate-200 px-2 text-[11px]" x-text="projects.length"></span></button>
@@ -671,15 +768,51 @@ document.querySelector('#app').innerHTML=`
           </div>
         </div>
 
-        <section x-show="page==='dashboard'">
-          <div class="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p class="text-sm font-medium text-blue-600">Operations overview</p><h1 class="mt-1 text-2xl font-bold">Dashboard</h1><p class="muted mt-1">One control plane for staged applications.</p></div><button @click="openCreate()" class="btn btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>Add application</button></div>
-          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <div class="stat-card"><span class="muted">Applications</span><div class="mt-3 text-3xl font-bold" x-text="stats.total"></div></div>
-            <div class="stat-card"><span class="muted">Updates</span><div class="mt-3 text-3xl font-bold" x-text="stats.updates"></div></div>
-            <div class="stat-card"><span class="muted">Healthy</span><div class="mt-3 text-3xl font-bold" x-text="stats.healthy"></div></div>
-            <div class="stat-card"><span class="muted">Attention</span><div class="mt-3 text-3xl font-bold" x-text="stats.attention"></div></div>
+        <section x-show="page==='dashboard'" class="space-y-6">
+          <div class="flex flex-wrap items-end justify-between gap-4">
+            <div><p class="text-sm font-medium text-blue-600">Fleet operations</p><h1 class="mt-1 text-2xl font-bold">Operations Dashboard</h1><p class="muted mt-1">Last-known fleet state across applications and deployment targets. No remote checks run just by opening this page.</p></div>
+            <div class="flex flex-wrap gap-2"><button @click="go('targets')" class="btn" x-show="userRole==='admin'"><i data-lucide="server" class="h-4 w-4"></i>Targets</button><button @click="openCreate()" class="btn btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>Add application</button></div>
           </div>
-          <div class="mt-6 panel"><div class="mb-3 flex justify-between"><div><h2 class="font-bold">Applications</h2><p class="muted">Latest deployment state.</p></div><button @click="go('projects')" class="btn">View all</button></div><template x-for="p in projects.slice(0,6)" :key="p.id"><button @click="openProject(p.id)" class="row w-full text-left"><span><b x-text="p.name"></b><small class="block text-slate-500" x-text="p.repo"></small></span><span class="pill"><span class="status-dot" :class="p.health==='healthy'?'bg-emerald-500':p.health==='attention'?'bg-rose-500':'bg-amber-500'"></span><span x-text="p.health"></span></span></button></template></div>
+
+          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            <button @click="go('projects')" class="stat-card text-left"><span class="muted">Applications</span><div class="mt-3 text-3xl font-bold" x-text="stats.total"></div><small class="mt-2 block text-slate-400">Registered fleet</small></button>
+            <button @click="go('targets')" class="stat-card text-left"><span class="muted">Targets</span><div class="mt-3 text-3xl font-bold" x-text="stats.targets"></div><small class="mt-2 block text-slate-400"><span x-text="stats.remoteTargets"></span> remote</small></button>
+            <button @click="filter='healthy';go('projects')" class="stat-card text-left"><span class="muted">Healthy</span><div class="mt-3 text-3xl font-bold text-emerald-700" x-text="stats.healthy"></div><small class="mt-2 block text-slate-400">Last known</small></button>
+            <button @click="filter='attention';go('projects')" class="stat-card text-left"><span class="muted">Attention</span><div class="mt-3 text-3xl font-bold text-rose-700" x-text="stats.attention"></div><small class="mt-2 block text-slate-400">Needs review</small></button>
+            <button @click="filter='updates';go('projects')" class="stat-card text-left"><span class="muted">Updates</span><div class="mt-3 text-3xl font-bold text-amber-700" x-text="stats.updates"></div><small class="mt-2 block text-slate-400">Known available</small></button>
+            <div class="stat-card"><span class="muted">Pending</span><div class="mt-3 text-3xl font-bold" x-text="stats.pending"></div><small class="mt-2 block text-slate-400">Not checked yet</small></div>
+          </div>
+
+          <div class="grid gap-5 xl:grid-cols-[1.2fr_.8fr]">
+            <div class="panel">
+              <div class="mb-4 flex items-start justify-between gap-3"><div><h2 class="font-bold">Attention queue</h2><p class="muted mt-1">Applications with last-known health attention or a known update.</p></div><button @click="go('projects')" class="btn">All applications</button></div>
+              <div x-show="attentionProjects.length===0" class="rounded-2xl bg-emerald-50 px-4 py-6 text-center text-sm text-emerald-700">No known application needs attention.</div>
+              <template x-for="p in attentionProjects" :key="p.id"><button @click="openProject(p.id)" class="row w-full text-left"><span class="min-w-0"><b class="block truncate" x-text="p.name"></b><small class="block truncate text-slate-500" x-text="p.repo"></small></span><span class="flex flex-wrap justify-end gap-2"><span x-show="p.update" class="pill border-amber-200 bg-amber-50 text-amber-700">Update</span><span class="pill"><span class="status-dot" :class="p.health==='attention'?'bg-rose-500':p.health==='healthy'?'bg-emerald-500':'bg-amber-500'"></span><span x-text="p.health||'pending'"></span></span></span></button></template>
+            </div>
+
+            <div class="panel">
+              <div class="mb-4"><h2 class="font-bold">Deployment targets</h2><p class="muted mt-1">Application distribution by local/remote execution node.</p></div>
+              <template x-for="t in targetSummaries" :key="t.id"><button @click="go('targets')" class="row w-full text-left"><span class="min-w-0"><b class="block truncate" x-text="t.name"></b><small class="block text-slate-500"><span x-text="t.apps"></span> applications · <span x-text="t.healthy"></span> healthy</small></span><span class="pill"><span class="status-dot" :class="t.status==='connected'?'bg-emerald-500':'bg-amber-500'"></span><span x-text="t.status"></span></span></button></template>
+            </div>
+          </div>
+
+          <div class="grid gap-5 xl:grid-cols-2">
+            <div class="panel">
+              <div class="mb-4 flex items-start justify-between gap-3"><div><h2 class="font-bold">Recent deployments</h2><p class="muted mt-1">Most recently deployed applications from local registry metadata.</p></div><button @click="go('projects')" class="btn">View registry</button></div>
+              <div x-show="recentDeployments.length===0" class="rounded-2xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">No deployment history recorded yet.</div>
+              <template x-for="p in recentDeployments" :key="p.id"><button @click="openProject(p.id)" class="row w-full text-left"><span class="min-w-0"><b class="block truncate" x-text="p.name"></b><small class="block truncate text-slate-500" x-text="p.release"></small></span><span class="text-right text-xs text-slate-500" x-text="formatDate(p.lastDeploy)"></span></button></template>
+            </div>
+
+            <div class="panel">
+              <div class="mb-4"><h2 class="font-bold">Fleet model</h2><p class="muted mt-1">Designed to scale without dashboard fan-out.</p></div>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <div class="rounded-2xl bg-slate-50 p-4"><b class="block text-sm">Dashboard load</b><span class="mt-1 block text-2xl font-bold">Local only</span><small class="text-slate-500">No GitHub or remote target calls</small></div>
+                <div class="rounded-2xl bg-slate-50 p-4"><b class="block text-sm">Remote checks</b><span class="mt-1 block text-2xl font-bold">On demand</span><small class="text-slate-500">Per app / explicit action</small></div>
+                <div class="rounded-2xl bg-slate-50 p-4"><b class="block text-sm">Application data</b><span class="mt-1 block text-2xl font-bold">Cached</span><small class="text-slate-500">Single-flight requests</small></div>
+                <div class="rounded-2xl bg-slate-50 p-4"><b class="block text-sm">Navigation</b><span class="mt-1 block text-2xl font-bold">Pretty URLs</span><small class="text-slate-500">Bookmarkable app tabs</small></div>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section x-show="page==='projects'">
@@ -807,7 +940,7 @@ document.querySelector('#app').innerHTML=`
         </section>
 
         <section x-show="page==='targets'" class="space-y-5">
-          <div class="flex flex-wrap items-end justify-between gap-4"><div><p class="text-sm font-medium text-blue-600">Infrastructure</p><h1 class="mt-1 text-2xl font-bold">Deployment Targets</h1><p class="muted mt-1">Local and remote Cloudways execution nodes. Targets are contacted only when an assigned application action is requested.</p></div><div class="flex gap-2"><a href="./api/agent-package.php" class="btn"><i data-lucide="package-check" class="h-4 w-4"></i>Download agent</a><button @click="openTargetCreate()" class="btn btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>Add target</button></div></div>
+          <div class="flex flex-wrap items-end justify-between gap-4"><div><p class="text-sm font-medium text-blue-600">Infrastructure</p><h1 class="mt-1 text-2xl font-bold">Deployment Targets</h1><p class="muted mt-1">Local and remote Cloudways execution nodes. Targets are contacted only when an assigned application action is requested.</p></div><div class="flex gap-2"><a  :href="appUrl('api/agent-package.php')" class="btn"><i data-lucide="package-check" class="h-4 w-4"></i>Download agent</a><button @click="openTargetCreate()" class="btn btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>Add target</button></div></div>
           <div class="grid gap-4 xl:grid-cols-2">
             <template x-for="t in targets" :key="t.id"><div class="panel">
               <div class="flex items-start justify-between gap-3"><div class="min-w-0"><div class="flex items-center gap-2"><h2 class="truncate text-lg font-bold" x-text="t.name"></h2><span class="pill" x-text="t.type"></span></div><code class="mt-1 block truncate text-xs text-slate-500" x-text="t.id"></code></div><span class="pill"><span class="status-dot" :class="t.status==='connected'?'bg-emerald-500':'bg-amber-500'"></span><span x-text="t.status"></span></span></div>
