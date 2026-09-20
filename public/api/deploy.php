@@ -3,6 +3,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/_bootstrap.php';
 
 use DigiOps\Deploy\ReleaseManager;
+use DigiOps\Audit\AuditLog;
 use DigiOps\GitHub\GitHubClient;
 use DigiOps\Registry\ProjectRegistry;
 use DigiOps\Security\SecretVault;
@@ -64,6 +65,13 @@ try {
                 'lastDeploy'=>date(DATE_ATOM),
                 'update'=>false,
             ]);
+            (new AuditLog())->write('REMOTE_DEPLOY_SUCCESS',[
+                'project'=>$projectId,
+                'target'=>$target['id']??'',
+                'release'=>$result['release']??null,
+                'commit'=>$commit,
+                'artifactId'=>$artifactId,
+            ],$user);
         }
     } finally { @unlink($zip); }
     JsonResponse::send($result);
