@@ -3,6 +3,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/_bootstrap.php';
 
 use DigiOps\Deploy\ReleaseManager;
+use DigiOps\Audit\AuditLog;
 use DigiOps\Security\Session;
 use DigiOps\Support\JsonResponse;
 use DigiOps\Registry\ProjectRegistry;
@@ -31,6 +32,12 @@ try {
         'commit'=>(string)($result['commit']??'—'),
         'lastDeploy'=>date(DATE_ATOM),
     ]);
+    (new AuditLog())->write('REMOTE_ROLLBACK_SUCCESS',[
+        'project'=>$projectId,
+        'target'=>$target['id']??'',
+        'release'=>$release,
+        'commit'=>$result['commit']??null,
+    ],$user);
     JsonResponse::send(['ok'=>true]+$result);
 }
 catch (Throwable $e) { JsonResponse::send(['error'=>$e->getMessage()],400); }
