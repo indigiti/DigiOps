@@ -83,6 +83,7 @@ final class ProjectRegistry
             'lastDeploy' => (string)($project['lastDeploy'] ?? 'Never'),
             'stack' => array_values(array_filter((array)($project['stack'] ?? ['Auto-detect']), 'is_string')),
             'environment' => (string)($project['environment'] ?? 'Stage'),
+            'targetId' => PathGuard::slug((string)($project['targetId'] ?? 'local')),
             'artifactName' => trim((string)($project['artifactName'] ?? 'digiops-release')),
             'healthPath' => trim((string)($project['healthPath'] ?? '/')),
             'retention' => max(1, min(20, (int)($project['retention'] ?? 5))),
