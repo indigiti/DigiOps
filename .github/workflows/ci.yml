@@ -35,7 +35,7 @@ jobs:
           php-version: '8.3'
           extensions: curl, zip, sodium
       - name: PHP lint
-        run: find app public tools -name '*.php' -print0 | xargs -0 -n1 php -l
+        run: find app public tools agent -name '*.php' -print0 | xargs -0 -n1 php -l
       - name: Path guard tests
         run: php tests/php/PathGuardTest.php
 
