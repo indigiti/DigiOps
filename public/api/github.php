@@ -4,6 +4,7 @@ require_once __DIR__ . '/_bootstrap.php';
 
 use DigiOps\Audit\AuditLog;
 use DigiOps\GitHub\GitHubClient;
+use DigiOps\GitHub\DeploymentCandidateSelector;
 use DigiOps\Registry\ProjectRegistry;
 use DigiOps\Security\SecretVault;
 use DigiOps\Security\Session;
@@ -45,39 +46,16 @@ try {
     $deployedCommit=(string)($project['commit']??'');
     if ($deployedCommit==='—') $deployedCommit='';
 
-    $successfulRun=null;
-    foreach ($workflowRuns as $run) {
-        if (($run['status']??'')==='completed' && ($run['conclusion']??'')==='success') {
-            $successfulRun=$run;
-            break;
-        }
-    }
-
-    $candidateArtifact=null;
-    $candidateArtifacts=[];
-    $artifactMatch='none';
     $wanted=trim((string)($project['artifactName']??'digiops-release')) ?: 'digiops-release';
-    if ($successfulRun) {
-        $artifactPayload=$client->artifacts($project['repo'],(int)($successfulRun['id']??0));
-        $candidateArtifacts=$artifactPayload['artifacts']??[];
-        foreach ($candidateArtifacts as $artifact) {
-            if (($artifact['name']??'')===$wanted && !($artifact['expired']??false)) {
-                $candidateArtifact=$artifact;
-                $artifactMatch='configured-name';
-                break;
-            }
-        }
-        if (!$candidateArtifact) {
-            $activeArtifacts=array_values(array_filter(
-                $candidateArtifacts,
-                fn($a)=>is_array($a) && !($a['expired']??false)
-            ));
-            if (count($activeArtifacts)===1) {
-                $candidateArtifact=$activeArtifacts[0];
-                $artifactMatch='single-artifact-fallback';
-            }
-        }
-    }
+    $selection=DeploymentCandidateSelector::find(
+        $workflowRuns,
+        fn(int $runId): array => $client->artifacts($project['repo'],$runId),
+        $wanted
+    );
+    $successfulRun=$selection['run']??null;
+    $candidateArtifact=$selection['artifact']??null;
+    $candidateArtifacts=$selection['artifacts']??[];
+    $artifactMatch=(string)($selection['match']??'none');
 
     $candidateSha=(string)($successfulRun['head_sha']??'');
     $deployableReady=$successfulRun!==null && $candidateArtifact!==null && !($candidateArtifact['expired']??false);
@@ -106,8 +84,8 @@ try {
     }
 
     $candidateReason='ready';
-    if (!$successfulRun) $candidateReason='no-successful-workflow-run';
-    elseif (!$candidateArtifact) $candidateReason='artifact-not-found';
+    if (!$successfulRun && (int)($selection['successfulRunsChecked']??0)===0) $candidateReason='no-successful-workflow-run';
+    elseif (!$candidateArtifact) $candidateReason='configured-artifact-not-found';
     elseif ($candidateArtifact['expired']??false) $candidateReason='artifact-expired';
 
     (new ProjectRegistry())->patchRuntime($projectId,['update'=>$deployableUpdate]);
@@ -174,6 +152,7 @@ try {
                 'author'=>$candidateCommit['commit']['author']['name']??($successfulRun['head_commit']['author']['name']??null),
             ],
             'artifactCount'=>count($candidateArtifacts),
+            'successfulRunsChecked'=>(int)($selection['successfulRunsChecked']??0),
         ],
         'branches'=>array_map(fn($b)=>['name'=>$b['name']??'','sha'=>$b['commit']['sha']??''],$branches),
         'commits'=>array_map(fn($c)=>[
