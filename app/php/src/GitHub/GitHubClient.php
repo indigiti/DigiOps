@@ -60,6 +60,16 @@ final class GitHubClient
         }
     }
 
+    public function workflowRun(string $fullName, int $runId): array
+    {
+        if ($runId <= 0) throw new RuntimeException('INVALID_WORKFLOW_RUN');
+        try {
+            return $this->get('/repos/' . $this->repoPath($fullName) . '/actions/runs/' . $runId);
+        } catch (RuntimeException $e) {
+            throw $this->contextualize('ACTIONS', $e);
+        }
+    }
+
     public function downloadArtifact(string $fullName, int $artifactId, string $target): void
     {
         $this->download('/repos/' . $this->repoPath($fullName) . '/actions/artifacts/' . $artifactId . '/zip', $target);

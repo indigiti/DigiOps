@@ -10,6 +10,7 @@ header('X-Accel-Buffering: no');
 use DigiOps\Deploy\ReleaseManager;
 use DigiOps\Audit\AuditLog;
 use DigiOps\GitHub\GitHubClient;
+use DigiOps\GitHub\DeploymentCandidateSelector;
 use DigiOps\Registry\ProjectRegistry;
 use DigiOps\Security\SecretVault;
 use DigiOps\Security\Session;
@@ -37,24 +38,46 @@ try {
 
     $runId=(int)($data['runId']??0);
     $artifactId=(int)($data['artifactId']??0);
-    $commit=(string)($data['commit']??'');
-    if ($artifactId<=0) {
-        if ($runId<=0) {
-            $runs=$client->workflowRuns($project['repo'],$project['branch'],20)['workflow_runs']??[];
-            $match=null;
-            foreach ($runs as $run) if (($run['status']??'')==='completed' && ($run['conclusion']??'')==='success') { $match=$run; break; }
-            if (!$match) throw new RuntimeException('NO_SUCCESSFUL_WORKFLOW_RUN');
-            $runId=(int)$match['id'];
-            $commit=(string)($match['head_sha']??$commit);
+    $commit=trim((string)($data['commit']??''));
+    $wanted=trim((string)($project['artifactName']??'digiops-release')) ?: 'digiops-release';
+
+    if ($runId>0) {
+        $run=$client->workflowRun($project['repo'],$runId);
+        if (($run['status']??'')!=='completed' || ($run['conclusion']??'')!=='success') {
+            throw new RuntimeException('DEPLOY_WORKFLOW_NOT_SUCCESSFUL');
         }
+        if ((string)($run['head_branch']??'') !== (string)$project['branch']) {
+            throw new RuntimeException('DEPLOY_WORKFLOW_BRANCH_MISMATCH');
+        }
+        $runCommit=(string)($run['head_sha']??'');
+        if ($commit!=='' && $runCommit!=='' && !hash_equals($runCommit,$commit)) {
+            throw new RuntimeException('DEPLOY_COMMIT_MISMATCH');
+        }
+        $commit=$runCommit!==''?$runCommit:$commit;
         $artifacts=$client->artifacts($project['repo'],$runId)['artifacts']??[];
-        $wanted=$project['artifactName'] ?: 'digiops-release';
-        $match=null;
-        foreach ($artifacts as $artifact) if (($artifact['name']??'')===$wanted && !($artifact['expired']??false)) { $match=$artifact; break; }
-        if (!$match && count($artifacts)===1) $match=$artifacts[0];
-        if (!$match) throw new RuntimeException('DEPLOY_ARTIFACT_NOT_FOUND');
-        $artifactId=(int)$match['id'];
+        $artifact=DeploymentCandidateSelector::exactArtifact(
+            is_array($artifacts)?$artifacts:[],
+            $wanted,
+            $artifactId>0?$artifactId:null
+        );
+        if ($artifact===null) throw new RuntimeException('DEPLOY_ARTIFACT_NAME_MISMATCH');
+        $artifactId=(int)($artifact['id']??0);
+    } else {
+        $runs=$client->workflowRuns($project['repo'],$project['branch'],20)['workflow_runs']??[];
+        $selection=DeploymentCandidateSelector::find(
+            is_array($runs)?$runs:[],
+            fn(int $candidateRunId): array => $client->artifacts($project['repo'],$candidateRunId),
+            $wanted
+        );
+        $run=$selection['run']??null;
+        $artifact=$selection['artifact']??null;
+        if (!is_array($run) || !is_array($artifact)) throw new RuntimeException('DEPLOY_ARTIFACT_NOT_FOUND');
+        $runId=(int)($run['id']??0);
+        $artifactId=(int)($artifact['id']??0);
+        $commit=(string)($run['head_sha']??$commit);
     }
+
+    if ($runId<=0 || $artifactId<=0 || $commit==='') throw new RuntimeException('DEPLOY_CANDIDATE_INVALID');
 
     Files::ensureDir(DIGIOPS_PRIVATE_ROOT . '/tmp');
     $zip=DIGIOPS_PRIVATE_ROOT . '/tmp/artifact-' . bin2hex(random_bytes(6)) . '.zip';
