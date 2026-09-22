@@ -381,6 +381,7 @@ function app(){
           const age=Date.now()-new Date(watch.startedAt).getTime()
           if(Number.isFinite(age)&&age>30*60*1000){
             watch.status='attention';watch.phase='verification-window-expired';watch.lastCheckedAt=new Date().toISOString()
+            this.error=(watch.projectName||watch.projectId)+' deployment verification exceeded 30 minutes. Open the application and run Check update before retrying.'
             continue
           }
           try{
@@ -393,13 +394,22 @@ function app(){
               const completed={...watch}
               this.clearDeploymentWatch(watch.requestId)
               this.cacheDropProject(watch.projectId)
-              try{await api('./api/health.php?project='+encodeURIComponent(watch.projectId))}catch{}
+              let healthResult=null
+              try{healthResult=await api('./api/health.php?project='+encodeURIComponent(watch.projectId))}catch{}
               await this.loadProjects()
               if(this.selected&&this.selected.id===watch.projectId){
+                if(healthResult)this.health=this.cachePut('health',watch.projectId,healthResult)
                 try{await this.loadGithubInfo(true)}catch{}
                 try{await this.loadReleases(true)}catch{}
               }
-              this.notice=(completed.projectName||completed.projectId)+' deployed and verified in background · '+(completed.run||'build')+' · artifact '+(completed.artifact||'—')+'.'
+              const identity=(completed.run||'build')+' · artifact '+(completed.artifact||'—')
+              if(healthResult&&healthResult.ok){
+                this.notice=(completed.projectName||completed.projectId)+' deployed and health verified in background · '+identity+'.'
+              }else if(healthResult){
+                this.notice=(completed.projectName||completed.projectId)+' deployed · post-deploy health needs attention · '+identity+'.'
+              }else{
+                this.notice=(completed.projectName||completed.projectId)+' deployed · health verification unavailable · '+identity+'.'
+              }
             }else if(watch.status==='failed'){
               const failed=status.error||'DEPLOY_FAILED'
               this.clearDeploymentWatch(watch.requestId)
