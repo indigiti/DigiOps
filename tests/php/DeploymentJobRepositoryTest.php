@@ -29,19 +29,51 @@ $created=$repo->create([
     'state'=>'running',
     'phase'=>'preflight',
     'progress'=>12,
+    'verificationSource'=>'control-plane-preflight',
 ]);
 assert(($created['requestId']??'')===$id);
 assert(count($repo->active())===1);
 assert(($repo->latestForProject('app-1')['requestId']??'')===$id);
+assert(($created['verification'][0]['phase']??'')==='preflight');
+assert(($created['verification'][0]['status']??'')==='running');
 
-$repo->patch($id,['phase'=>'publishing','progress'=>82]);
+$repo->patch($id,['phase'=>'publishing','progress'=>82,'verificationSource'=>'local-release-manager']);
 $current=$repo->get($id);
 assert(($current['phase']??'')==='publishing');
 assert((int)($current['progress']??0)===82);
+assert(($current['verification'][0]['status']??'')==='passed');
+assert(($current['verification'][1]['phase']??'')==='publishing');
+assert(($current['verification'][1]['status']??'')==='running');
 
-$repo->patch($id,['state'=>'deployed','phase'=>'complete','progress'=>100,'release'=>'r1']);
+$repo->patch($id,['state'=>'deployed','phase'=>'complete','progress'=>100,'release'=>'r1','verificationSource'=>'local-progress']);
+$done=$repo->get($id);
 assert(count($repo->active())===0);
-assert(($repo->get($id)['release']??'')==='r1');
+assert(($done['release']??'')==='r1');
+assert(($done['verification'][1]['status']??'')==='passed');
+assert(($done['verification'][2]['phase']??'')==='complete');
+assert(($done['verification'][2]['status']??'')==='passed');
+
+$failedId=str_repeat('c',32);
+$repo->create([
+    'requestId'=>$failedId,
+    'project'=>'app-2',
+    'commit'=>str_repeat('d',40),
+    'state'=>'running',
+    'phase'=>'artifact-verified',
+    'progress'=>30,
+]);
+$repo->patch($failedId,[
+    'state'=>'failed',
+    'phase'=>'artifact-verified',
+    'progress'=>100,
+    'error'=>'ARTIFACT_DIGEST_MISMATCH',
+    'verificationSource'=>'deploy-api',
+]);
+$failed=$repo->get($failedId);
+assert(($failed['phase']??'')==='artifact-verified');
+assert(($failed['verification'][0]['status']??'')==='failed');
+assert(($failed['verification'][0]['error']??'')==='ARTIFACT_DIGEST_MISMATCH');
+assert(($failed['verification'][0]['source']??'')==='deploy-api');
 
 Files::removeTree($root);
 echo "DeploymentJobRepositoryTest PASS\n";
