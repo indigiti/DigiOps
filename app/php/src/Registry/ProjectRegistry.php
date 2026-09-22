@@ -87,7 +87,7 @@ final class ProjectRegistry
     private function allUnlocked(): array
     {
         $items = [];
-        foreach (Files::readJson($this->file, []) as $project) {
+        foreach (Files::readJsonStrict($this->file, []) as $project) {
             if (!is_array($project)) continue;
             try { $items[] = $this->normalize($project); } catch (\Throwable) {}
         }
