@@ -64,8 +64,8 @@ Deployment is a handoff, not a blocking page state.
 - DigiOps records the exact project, commit, workflow artifact and deployment request ID before starting.
 - The server continues deployment even if the browser request is interrupted.
 - After a short foreground handoff, a persistent browser watcher follows authoritative deployment state.
-- The watcher continues while navigating around DigiOps and resumes after reload or sign-in using browser-local persisted watch metadata.
+- Active deployment identity is stored by DigiOps on the server. The UI reloads the server job journal after navigation, reload or sign-in, so another authenticated browser can see the same active operation.
 - When the exact request is confirmed deployed, DigiOps runs the application health check automatically.
 - The UI distinguishes **deployed + health verified**, **deployed + health needs attention**, and **deployed + health verification unavailable**.
 - A second deploy for the same application is disabled while an active deployment watch exists.
-- If the browser is completely closed, server deployment continues; verification resumes the next time DigiOps is opened.
+- If the browser is completely closed, server deployment continues; the next DigiOps session reconstructs active work from the server journal and resumes authoritative verification.

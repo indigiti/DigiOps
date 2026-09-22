@@ -2,82 +2,85 @@
 
 ## Release
 
-**v1.0.0 — Production Feature Complete / Runtime Certification Pending**
+**v1.7.0 — Reliability Foundation**
 
-## P00 — Product / security baseline
-- [x] Single-domain multi-folder model
-- [x] `public_html/<app>/` + `private_html/<app>/`
-- [x] No database
-- [x] No arbitrary browser shell
-- [x] Approval-oriented artifact deployment
+## Control plane
 
-## P01 — UI/UX
-- [x] Reference-inspired admin shell
-- [x] Dashboard
-- [x] Application cards/search/filter
-- [x] Create application
-- [x] Project tabs
-- [x] Connection UI
-- [x] Audit UI
-- [x] Installer/login UI
-- [x] Responsive mobile sidebar
+- [x] Multi-application local/remote target model
+- [x] Exact GitHub workflow/artifact/commit candidate selection
+- [x] Server-side deployment request identity
+- [x] Durable deployment job journal
+- [x] Background verification recoverable across browser reload/device changes
+- [x] Post-deploy health attached to deployment jobs
+- [x] Health freshness retained in project registry
 
-## P02 — Registry / path security
-- [x] File-backed registry
-- [x] Strict slug validation
-- [x] Managed public/private path generation
-- [x] Traversal rejection
+## Publication safety
 
-## P03 — GitHub
-- [x] Encrypted token vault
-- [x] Repository validation
-- [x] Branch list
-- [x] Commit list
-- [x] Workflow runs
-- [x] Update detection
-- [x] Artifact discovery/download
-
-## P04 — Deployment
-- [x] Deployment lock
-- [x] ZIP traversal checks
-- [x] Symlink rejection
-- [x] Payload entrypoint validation
+- [x] Per-project deploy lock
+- [x] Rollback uses the same operation lock
 - [x] Pre-deploy snapshot
-- [x] Staged publication
-- [x] Release metadata/hash
-- [x] Retention
-- [x] Rollback
+- [x] Transactional public-directory switch
+- [x] Automatic restoration if final cutover rename fails
+- [x] Same transactional switch on remote agent
+- [x] Remote capability gate for transactional publication
+- [x] ZIP traversal and symlink rejection
+- [x] Payload entrypoint validation
+- [x] Local storage/disk preflight
 
-## P05 — Files / releases
-- [x] Restricted public/private listing
-- [x] Release history
-- [x] Rollback controls
-- [x] Disk-size reporting
-- [ ] Browser file mutation intentionally excluded from v1.0; deploy artifacts remain source of truth
+## Supply chain
 
-## P06 — Health / logs / audit
-- [x] HTTP health probe
-- [x] PHP extension/runtime check
-- [x] Storage check
-- [x] Hash-chained audit events
+- [x] Workflow run revalidation
+- [x] Branch and commit revalidation
+- [x] Exact artifact name + ID
+- [x] GitHub SHA-256 artifact digest verification when supplied
+- [x] Download SHA-256 stored in release provenance
 
-## P07 — Authentication
-- [x] First-run installer
-- [x] Password hashing
-- [x] Hardened sessions
-- [x] CSRF
-- [x] Login rate limiting
-- [x] Roles
-- [x] Optional TOTP
+## State integrity
 
-## P08 — CI / packaging
-- [x] Frontend build
+- [x] Atomic JSON writes
+- [x] Locked project registry mutations
+- [x] Locked target registry mutations
+- [x] Locked rate-limit counters
+- [x] Serialized hash-chain audit writes + audit head
+- [x] Encrypted GitHub/target secrets
+- [x] TOTP secrets stored in encrypted vault for new/migrated users
+
+## Browser / session hardening
+
+- [x] Hardened session cookie flags
+- [x] Cookie path scoped to DigiOps
+- [x] CSRF protection
+- [x] CSP-compatible Alpine build
+- [x] Deployed Content-Security-Policy
+- [x] nosniff / frame denial / referrer / permissions headers
+- [x] reduced-motion and focus-visible support
+
+## UI / operator workflow
+
+- [x] Command Center
+- [x] Applications
+- [x] Deployment Center
+- [x] Health & Readiness
+- [x] Deployment Targets
+- [x] Connections & Runtime
+- [x] Audit & Governance
+- [x] Help & Guide
+- [x] durable deployment activity instead of browser-only progress
+- [x] health freshness displayed in the UI
+
+## CI
+
 - [x] PHP lint
-- [x] Security leak check
-- [x] PathGuard test
-- [x] Production release package
-- [x] GitHub Actions artifact
+- [x] all PHP behavioral tests
+- [x] frontend CSP expression check
+- [x] route/workspace checks
+- [x] deployment reliability contract
+- [x] production package validation
+- [x] uploaded artifact validation
+- [x] secret/data leak guard
 
-## Remaining certification
+## Deliberate constraints
 
-The codebase is feature-complete for v1.0.0. Final production certification requires deploying the generated release package on the actual Cloudways application and testing real filesystem permissions, PHP extensions, HTTPS/session behavior, GitHub token permissions, artifact deployment and rollback against `stage.digiti.in`.
+- Browser file mutation remains excluded; deployment artifacts remain source of truth.
+- Redis is optional, not required for correctness.
+- Application-private payload is still overlaid onto application private runtime storage for compatibility. A future artifact contract may split immutable private code from explicit shared runtime directories.

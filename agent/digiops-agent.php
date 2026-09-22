@@ -5,7 +5,7 @@ declare(strict_types=1);
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, private');
 header('X-Content-Type-Options: nosniff');
-const AGENT_VERSION='1.4.0';
+const AGENT_VERSION='1.5.0';
 const MAX_SKEW=300;
 const MAX_CHUNK=786432;
 function fail(string $error,int $status=400): never {
@@ -49,6 +49,18 @@ function copyDir(string $src,string $dst): void {
         else copyFileAtomic($s,$d);
     }
 }
+function atomicSwitchDir(string $prepared,string $target,string $label): void {
+    if(!is_dir($prepared))fail('PREPARED_RELEASE_MISSING',500);
+    $parent=dirname($target);ensureDir($parent);
+    $previous=$parent.'/.'.$label.'.previous-'.bin2hex(random_bytes(6));
+    $hadCurrent=is_dir($target);
+    if($hadCurrent && !@rename($target,$previous))fail('CURRENT_RELEASE_PARK_FAILED',500);
+    if(@rename($prepared,$target)){if($hadCurrent&&is_dir($previous))removeTree($previous);return;}
+    $restored=!$hadCurrent;
+    if($hadCurrent&&is_dir($previous)&&!file_exists($target))$restored=@rename($previous,$target);
+    if(!$restored)fail('PUBLISH_RENAME_FAILED_RESTORE_FAILED',500);
+    fail('PUBLISH_RENAME_FAILED_RESTORED',500);
+}
 function dirSize(string $dir): int { if(!is_dir($dir))return 0;$sum=0;$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir,FilesystemIterator::SKIP_DOTS));foreach($it as $f)if($f->isFile()&&!$f->isLink())$sum+=$f->getSize();return $sum; }
 function safeSlug(string $value): string { $v=strtolower(trim($value)); if(!preg_match('/^[a-z0-9][a-z0-9._-]{1,79}$/',$v))fail('INVALID_PROJECT_SLUG'); return $v; }
 function safeRelative(string $path): string { $p=trim(str_replace('\\','/',$path),'/'); if($p===''||str_contains($p,'..')||!preg_match('#^[A-Za-z0-9._/-]+$#',$p))fail('INVALID_RELATIVE_PATH'); return $p; }
@@ -81,6 +93,8 @@ function setDeploymentState(string $slug,string $state,string $phase,int $progre
         'updatedAt'=>$now,
         'commit'=>(string)($extra['commit']??($previous['commit']??'')),
         'artifactId'=>(string)($extra['artifactId']??($previous['artifactId']??'')),
+        'artifactDigest'=>(string)($extra['artifactDigest']??($previous['artifactDigest']??'')),
+        'downloadSha256'=>(string)($extra['downloadSha256']??($previous['downloadSha256']??'')),
         'requestId'=>(string)($extra['requestId']??($previous['requestId']??'')),
         'uploadId'=>(string)($extra['uploadId']??($previous['uploadId']??'')),
     ];
@@ -95,7 +109,7 @@ function deploymentStateIsActive(array $state): bool {
 function listReleases(string $slug): array { $dir=projectRuntime($slug).'/releases';if(!is_dir($dir))return[];$out=[];foreach(array_diff(scandir($dir)?:[],['.','..']) as $name){$path=$dir.'/'.$name;if(!is_dir($path))continue;$meta=readJsonFile($path.'/meta.json',['id'=>$name]);$meta['size']=dirSize($path.'/public')+(is_dir($path.'/private')?dirSize($path.'/private'):0);$out[]=$meta;}usort($out,fn($a,$b)=>strcmp((string)($b['createdAt']??''),(string)($a['createdAt']??'')));return$out; }
 function publishRelease(array $payload,string $zipFile): array {
     [$slug,$publicTarget,$privateTarget]=projectPaths($payload);$runtime=projectRuntime($slug);ensureDir($runtime,0700);$lock=fopen($runtime.'/deploy.lock','c+');if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))fail('DEPLOYMENT_LOCKED',409);
-    $stateMeta=['commit'=>(string)($payload['commit']??''),'artifactId'=>(string)($payload['artifactId']??''),'requestId'=>(string)($payload['requestId']??''),'uploadId'=>(string)($payload['uploadId']??'')];
+    $stateMeta=['commit'=>(string)($payload['commit']??''),'artifactId'=>(string)($payload['artifactId']??''),'artifactDigest'=>(string)($payload['artifactDigest']??''),'downloadSha256'=>(string)($payload['downloadSha256']??''),'requestId'=>(string)($payload['requestId']??''),'uploadId'=>(string)($payload['uploadId']??'')];
     try{
         setDeploymentState($slug,'running','validating',38,$stateMeta);
         $releaseId=date('Ymd-His').'-'.substr((string)($payload['commit']??bin2hex(random_bytes(4))),0,8);$stage=$runtime.'/staging/'.$releaseId;$releaseDir=$runtime.'/releases/'.$releaseId;ensureDir($stage);ensureDir(dirname($releaseDir));extractSafe($zipFile,$stage);[$publicPayload,$privatePayload]=payloads($stage);
@@ -104,11 +118,11 @@ function publishRelease(array $payload,string $zipFile): array {
         if(is_dir($publicTarget)&&count(array_diff(scandir($publicTarget)?:[],['.','..']))){$backup='pre-'.$releaseId;copyDir($publicTarget,$runtime.'/releases/'.$backup.'/public');writeJsonFile($runtime.'/releases/'.$backup.'/meta.json',['id'=>$backup,'type'=>'snapshot','createdAt'=>date(DATE_ATOM),'source'=>'pre-deploy']);}
         setDeploymentState($slug,'running','staging-release',68,$stateMeta+['release'=>$releaseId]);
         if(is_dir($releaseDir))removeTree($releaseDir);ensureDir($releaseDir);copyDir($publicPayload,$releaseDir.'/public');if($privatePayload!==null)copyDir($privatePayload,$releaseDir.'/private');
-        writeJsonFile($releaseDir.'/meta.json',['id'=>$releaseId,'type'=>'release','project'=>$slug,'commit'=>(string)($payload['commit']??''),'artifactId'=>(string)($payload['artifactId']??''),'createdAt'=>date(DATE_ATOM),'sha256'=>hash_file('sha256',$zipFile),'splitPrivate'=>$privatePayload!==null]);
+        writeJsonFile($releaseDir.'/meta.json',['id'=>$releaseId,'type'=>'release','project'=>$slug,'commit'=>(string)($payload['commit']??''),'artifactId'=>(string)($payload['artifactId']??''),'requestId'=>(string)($payload['requestId']??''),'artifactDigest'=>(string)($payload['artifactDigest']??''),'createdAt'=>date(DATE_ATOM),'sha256'=>(string)($payload['downloadSha256']??hash_file('sha256',$zipFile)),'splitPrivate'=>$privatePayload!==null]);
         setDeploymentState($slug,'running','publishing',82,$stateMeta+['release'=>$releaseId]);
         $tmp=dirname($publicTarget).'/.'.$slug.'.publish-'.bin2hex(random_bytes(4));copyDir($releaseDir.'/public',$tmp);
         setDeploymentState($slug,'running','switching',94,$stateMeta+['release'=>$releaseId]);
-        if($privatePayload!==null){ensureDir($privateTarget);copyDir($releaseDir.'/private',$privateTarget);}if(is_dir($publicTarget))removeTree($publicTarget);ensureDir(dirname($publicTarget));if(!rename($tmp,$publicTarget))fail('PUBLISH_RENAME_FAILED',500);
+        if($privatePayload!==null){ensureDir($privateTarget);copyDir($releaseDir.'/private',$privateTarget);}atomicSwitchDir($tmp,$publicTarget,$slug);
         $lastDeploy=date(DATE_ATOM);
         writeJsonFile($runtime.'/current.json',['release'=>$releaseId,'commit'=>(string)($payload['commit']??''),'requestId'=>(string)($payload['requestId']??''),'lastDeploy'=>$lastDeploy]);
         setDeploymentState($slug,'deployed','complete',100,$stateMeta+['release'=>$releaseId,'lastDeploy'=>$lastDeploy]);
@@ -117,14 +131,31 @@ function publishRelease(array $payload,string $zipFile): array {
 }
 $raw=(string)file_get_contents('php://input');verifySignature($raw);$data=json_decode($raw,true);if(!is_array($data))fail('INVALID_JSON');$action=(string)($data['action']??'');$payload=is_array($data['payload']??null)?$data['payload']:[];
 try{
-    if($action==='ping')ok(['agentVersion'=>AGENT_VERSION,'capabilities'=>['health','releases','deployment-status','deployment-request-id','files','deploy-chunked','rollback'],'runtime'=>['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip')],'server'=>php_uname('n')]);
+    if($action==='ping')ok(['agentVersion'=>AGENT_VERSION,'capabilities'=>['health','releases','deployment-status','deployment-request-id','atomic-switch-v1','files','deploy-chunked','rollback'],'runtime'=>['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip')],'server'=>php_uname('n')]);
     if($action==='health'){[$slug,$public,$private]=projectPaths($payload);$url=trim((string)($payload['url']??''));$healthPath=(string)($payload['healthPath']??'/');$http=['ok'=>false,'status'=>null,'ms'=>null];if($url!==''&&function_exists('curl_init')){$probe=rtrim($url,'/').'/'.ltrim($healthPath,'/');$start=microtime(true);$ch=curl_init($probe);curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_NOBODY=>true,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_TIMEOUT=>8,CURLOPT_CONNECTTIMEOUT=>4]);curl_exec($ch);$status=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);curl_close($ch);$http=['ok'=>$status>=200&&$status<400,'status'=>$status,'ms'=>(int)((microtime(true)-$start)*1000)];}$storage=['exists'=>is_dir($public),'bytes'=>dirSize($public),'writable'=>is_dir(dirname($public))&&is_writable(dirname($public))];$runtime=['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip'),'sodium'=>extension_loaded('sodium')];ok(['http'=>$http,'storage'=>$storage,'runtime'=>$runtime,'checkedAt'=>date(DATE_ATOM)]);}
     if($action==='releases'){$slug=safeSlug((string)($payload['project']??''));ok(['releases'=>listReleases($slug)]);}
     if($action==='deployment-status'){$slug=safeSlug((string)($payload['project']??''));$current=readJsonFile(projectRuntime($slug).'/current.json',[]);$deployment=deploymentState($slug);ok(['current'=>$current,'deployment'=>$deployment]);}
     if($action==='files'){[$slug,$public,$private]=projectPaths($payload);$scope=(string)($payload['scope']??'public');if(!in_array($scope,['public','private'],true))fail('INVALID_SCOPE');$root=$scope==='private'?$private:$public;$relative=trim(str_replace('\\','/',(string)($payload['path']??'')),'/');if(str_contains($relative,'..')||($relative!==''&&!preg_match('#^[A-Za-z0-9._/-]+$#',$relative)))fail('INVALID_PATH');$path=$relative===''?$root:$root.'/'.$relative;$items=[];if(is_dir($path)){foreach(array_diff(scandir($path)?:[],['.','..']) as $name){if(str_starts_with($name,'.'))continue;$full=$path.'/'.$name;$items[]=['name'=>$name,'type'=>is_dir($full)?'dir':'file','size'=>is_file($full)?filesize($full):null,'modified'=>date(DATE_ATOM,filemtime($full)?:time())];}}ok(['listing'=>['path'=>$relative,'items'=>$items]]);}
-    if($action==='deploy-start'){$slug=safeSlug((string)($payload['project']??''));$size=(int)($payload['size']??0);if($size<1||$size>1024*1024*1024)fail('ARTIFACT_SIZE_INVALID');$existing=deploymentState($slug);if(deploymentStateIsActive($existing))fail('DEPLOYMENT_ALREADY_RUNNING',409);$id=bin2hex(random_bytes(12));$dir=projectRuntime($slug).'/incoming/'.$id;ensureDir($dir,0700);file_put_contents($dir.'/artifact.zip','');$meta=(array)($payload['meta']??[]);writeJsonFile($dir.'/meta.json',['project'=>$slug,'size'=>$size,'received'=>0,'sha256'=>(string)($payload['sha256']??''),'meta'=>$meta]);setDeploymentState($slug,'uploading','uploading',8,['commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??''),'requestId'=>(string)($meta['requestId']??''),'uploadId'=>$id,'received'=>0,'size'=>$size,'startedAt'=>date(DATE_ATOM)]);ok(['uploadId'=>$id,'chunkBytes'=>524288]);}
+    if($action==='deploy-start'){$slug=safeSlug((string)($payload['project']??''));$size=(int)($payload['size']??0);if($size<1||$size>1024*1024*1024)fail('ARTIFACT_SIZE_INVALID');$existing=deploymentState($slug);if(deploymentStateIsActive($existing))fail('DEPLOYMENT_ALREADY_RUNNING',409);$id=bin2hex(random_bytes(12));$dir=projectRuntime($slug).'/incoming/'.$id;ensureDir($dir,0700);file_put_contents($dir.'/artifact.zip','');$meta=(array)($payload['meta']??[]);writeJsonFile($dir.'/meta.json',['project'=>$slug,'size'=>$size,'received'=>0,'sha256'=>(string)($payload['sha256']??''),'meta'=>$meta]);setDeploymentState($slug,'uploading','uploading',8,['commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??''),'artifactDigest'=>(string)($meta['artifactDigest']??''),'downloadSha256'=>(string)($meta['downloadSha256']??''),'requestId'=>(string)($meta['requestId']??''),'uploadId'=>$id,'received'=>0,'size'=>$size,'startedAt'=>date(DATE_ATOM)]);ok(['uploadId'=>$id,'chunkBytes'=>524288]);}
     if($action==='deploy-chunk'){$slug=safeSlug((string)($payload['project']??''));$id=(string)($payload['uploadId']??'');if(!preg_match('/^[a-f0-9]{24}$/',$id))fail('UPLOAD_ID_INVALID');$dir=projectRuntime($slug).'/incoming/'.$id;$meta=readJsonFile($dir.'/meta.json',[]);if(!$meta)fail('UPLOAD_NOT_FOUND',404);$offset=(int)($payload['offset']??-1);if($offset!==(int)($meta['received']??0))fail('UPLOAD_OFFSET_MISMATCH',409);$chunk=base64_decode((string)($payload['data']??''),true);if($chunk===false||$chunk==='')fail('CHUNK_INVALID');if(strlen($chunk)>MAX_CHUNK)fail('CHUNK_TOO_LARGE');$fp=fopen($dir.'/artifact.zip','ab');if(!$fp)fail('UPLOAD_WRITE_FAILED',500);$written=fwrite($fp,$chunk);fclose($fp);if($written!==strlen($chunk))fail('UPLOAD_WRITE_FAILED',500);$meta['received']=$offset+$written;writeJsonFile($dir.'/meta.json',$meta);$size=max(1,(int)($meta['size']??1));$pct=8+(int)floor(22*min(1,$meta['received']/$size));setDeploymentState($slug,'uploading','uploading',$pct,['uploadId'=>$id,'received'=>$meta['received'],'size'=>$size]);ok(['received'=>$meta['received']]);}
-    if($action==='deploy-commit'){$slug=safeSlug((string)($payload['project']??''));$id=(string)($payload['uploadId']??'');if(!preg_match('/^[a-f0-9]{24}$/',$id))fail('UPLOAD_ID_INVALID');$dir=projectRuntime($slug).'/incoming/'.$id;$upload=readJsonFile($dir.'/meta.json',[]);if(!$upload)fail('UPLOAD_NOT_FOUND',404);$zip=$dir.'/artifact.zip';if((int)($upload['received']??0)!==(int)($upload['size']??-1)||filesize($zip)!==(int)$upload['size'])fail('UPLOAD_INCOMPLETE');$expected=strtolower((string)($upload['sha256']??''));if($expected!==''&&!hash_equals($expected,strtolower(hash_file('sha256',$zip))))fail('ARTIFACT_HASH_MISMATCH');$meta=(array)($upload['meta']??[]);$meta['project']=$slug;$meta['uploadId']=$id;$meta['publicPath']=$payload['publicPath']??('public_html/'.$slug);$meta['privatePath']=$payload['privatePath']??('private_html/'.$slug);$GLOBALS['DIGIOPS_ACTIVE_DEPLOYMENT']=['slug'=>$slug,'commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??''),'requestId'=>(string)($meta['requestId']??''),'uploadId'=>$id];try{$result=publishRelease($meta,$zip);$GLOBALS['DIGIOPS_ACTIVE_DEPLOYMENT']=null;removeTree($dir);ok($result);}catch(Throwable $e){setDeploymentState($slug,'failed','failed',100,['commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??''),'requestId'=>(string)($meta['requestId']??''),'uploadId'=>$id,'error'=>$e->getMessage()]);$GLOBALS['DIGIOPS_ACTIVE_DEPLOYMENT']=null;throw $e;}}
-    if($action==='rollback'){[$slug,$publicTarget,$privateTarget]=projectPaths($payload);$release=(string)($payload['release']??'');if(!preg_match('/^[A-Za-z0-9._-]{3,100}$/',$release))fail('INVALID_RELEASE_ID');$root=projectRuntime($slug).'/releases/'.$release;if(!is_dir($root.'/public'))fail('RELEASE_NOT_FOUND',404);$tmp=dirname($publicTarget).'/.'.$slug.'.rollback-'.bin2hex(random_bytes(4));copyDir($root.'/public',$tmp);if(is_dir($root.'/private')){ensureDir($privateTarget);copyDir($root.'/private',$privateTarget);}if(is_dir($publicTarget))removeTree($publicTarget);if(!rename($tmp,$publicTarget))fail('ROLLBACK_FAILED',500);$meta=readJsonFile($root.'/meta.json',[]);writeJsonFile(projectRuntime($slug).'/current.json',['release'=>$release,'commit'=>(string)($meta['commit']??'—'),'lastDeploy'=>date(DATE_ATOM)]);ok(['release'=>$release,'commit'=>$meta['commit']??'—']);}
+    if($action==='deploy-commit'){$slug=safeSlug((string)($payload['project']??''));$id=(string)($payload['uploadId']??'');if(!preg_match('/^[a-f0-9]{24}$/',$id))fail('UPLOAD_ID_INVALID');$dir=projectRuntime($slug).'/incoming/'.$id;$upload=readJsonFile($dir.'/meta.json',[]);if(!$upload)fail('UPLOAD_NOT_FOUND',404);$zip=$dir.'/artifact.zip';if((int)($upload['received']??0)!==(int)($upload['size']??-1)||filesize($zip)!==(int)$upload['size'])fail('UPLOAD_INCOMPLETE');$expected=strtolower((string)($upload['sha256']??''));if($expected!==''&&!hash_equals($expected,strtolower(hash_file('sha256',$zip))))fail('ARTIFACT_HASH_MISMATCH');$meta=(array)($upload['meta']??[]);$meta['project']=$slug;$meta['uploadId']=$id;$meta['publicPath']=$payload['publicPath']??('public_html/'.$slug);$meta['privatePath']=$payload['privatePath']??('private_html/'.$slug);$GLOBALS['DIGIOPS_ACTIVE_DEPLOYMENT']=['slug'=>$slug,'commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??''),'artifactDigest'=>(string)($meta['artifactDigest']??''),'downloadSha256'=>(string)($meta['downloadSha256']??''),'requestId'=>(string)($meta['requestId']??''),'uploadId'=>$id];try{$result=publishRelease($meta,$zip);$GLOBALS['DIGIOPS_ACTIVE_DEPLOYMENT']=null;removeTree($dir);ok($result);}catch(Throwable $e){setDeploymentState($slug,'failed','failed',100,['commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??''),'requestId'=>(string)($meta['requestId']??''),'uploadId'=>$id,'error'=>$e->getMessage()]);$GLOBALS['DIGIOPS_ACTIVE_DEPLOYMENT']=null;throw $e;}}
+    if($action==='rollback'){
+        [$slug,$publicTarget,$privateTarget]=projectPaths($payload);
+        $release=(string)($payload['release']??'');
+        if(!preg_match('/^[A-Za-z0-9._-]{3,100}$/',$release))fail('INVALID_RELEASE_ID');
+        $runtime=projectRuntime($slug);ensureDir($runtime,0700);
+        $lock=fopen($runtime.'/deploy.lock','c+');
+        if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))fail('DEPLOYMENT_LOCKED',409);
+        $root=$runtime.'/releases/'.$release;
+        if(!is_dir($root.'/public'))fail('RELEASE_NOT_FOUND',404);
+        $tmp=dirname($publicTarget).'/.'.$slug.'.rollback-'.bin2hex(random_bytes(4));
+        copyDir($root.'/public',$tmp);
+        if(is_dir($root.'/private')){ensureDir($privateTarget);copyDir($root.'/private',$privateTarget);}
+        atomicSwitchDir($tmp,$publicTarget,$slug);
+        $meta=readJsonFile($root.'/meta.json',[]);
+        writeJsonFile($runtime.'/current.json',['release'=>$release,'commit'=>(string)($meta['commit']??'—'),'lastDeploy'=>date(DATE_ATOM)]);
+        flock($lock,LOCK_UN);fclose($lock);
+        ok(['release'=>$release,'commit'=>$meta['commit']??'—']);
+    }
     fail('UNKNOWN_ACTION',404);
 }catch(Throwable $e){ fail($e->getMessage(),400); }

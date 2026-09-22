@@ -28,24 +28,37 @@ final class UserStore
         if (strlen($password) < 12) throw new InvalidArgumentException('PASSWORD_TOO_SHORT');
         if (!in_array($role, ['admin','operator','viewer'], true)) throw new InvalidArgumentException('INVALID_ROLE');
 
-        $users = Files::readJson($this->file, []);
-        foreach ($users as $user) {
-            if (($user['username'] ?? '') === $username) throw new RuntimeException('USER_EXISTS');
+        foreach(Files::readJson($this->file,[]) as $existing){
+            if(($existing['username']??'')===$username) throw new RuntimeException('USER_EXISTS');
         }
+        $id=bin2hex(random_bytes(8));
+        $normalizedTotp=$totpSecret ? strtoupper((string)preg_replace('/[^A-Z2-7]/', '', $totpSecret)) : '';
+
         $record = [
-            'id' => bin2hex(random_bytes(8)),
+            'id' => $id,
             'username' => $username,
             'name' => trim($name) ?: $username,
             'passwordHash' => password_hash($password, PASSWORD_DEFAULT),
             'role' => $role,
-            'totpSecret' => $totpSecret ? strtoupper(preg_replace('/[^A-Z2-7]/', '', $totpSecret)) : null,
+            'totpEnabled' => $normalizedTotp!=='',
             'enabled' => true,
             'createdAt' => date(DATE_ATOM),
         ];
-        $users[] = $record;
-        Files::writeJson($this->file, $users);
-        unset($record['passwordHash'], $record['totpSecret']);
-        return $record;
+
+        if($normalizedTotp!=='') (new SecretVault())->put('user.'.$id.'.totp',$normalizedTotp);
+
+        Files::withLock($this->file.'.lock', function() use ($record,$username): void {
+            $users=Files::readJson($this->file,[]);
+            foreach($users as $user){
+                if(($user['username']??'')===$username) throw new RuntimeException('USER_EXISTS');
+            }
+            $users[]=$record;
+            Files::writeJson($this->file,$users);
+        });
+
+        $public=$record;
+        unset($public['passwordHash']);
+        return $public;
     }
 
     public function verify(string $username, string $password, ?string $totp = null): ?array
@@ -54,8 +67,25 @@ final class UserStore
         foreach (Files::readJson($this->file, []) as $user) {
             if (($user['username'] ?? '') !== $username || !($user['enabled'] ?? false)) continue;
             if (!password_verify($password, (string)($user['passwordHash'] ?? ''))) return null;
-            $secret = (string)($user['totpSecret'] ?? '');
+
+            $id=(string)($user['id']??'');
+            $legacy=(string)($user['totpSecret']??'');
+            $secret=$legacy;
+            if($secret==='' && ($user['totpEnabled']??false) && $id!==''){
+                try{$secret=(string)((new SecretVault())->get('user.'.$id.'.totp')??'');}
+                catch(\Throwable){return null;}
+            }
             if ($secret !== '' && !Totp::verify($secret, (string)$totp)) return null;
+
+            if($legacy!=='' && $id!==''){
+                try{
+                    (new SecretVault())->put('user.'.$id.'.totp',$legacy);
+                    $this->removeLegacyTotp($id);
+                    $user['totpEnabled']=true;
+                    unset($user['totpSecret']);
+                }catch(\Throwable){}
+            }
+
             unset($user['passwordHash'], $user['totpSecret']);
             return $user;
         }
@@ -66,9 +96,25 @@ final class UserStore
     {
         $out = [];
         foreach (Files::readJson($this->file, []) as $user) {
+            if(isset($user['totpSecret']) && !isset($user['totpEnabled']))$user['totpEnabled']=(string)$user['totpSecret']!=='';
             unset($user['passwordHash'], $user['totpSecret']);
             $out[] = $user;
         }
         return $out;
+    }
+
+    private function removeLegacyTotp(string $id): void
+    {
+        Files::withLock($this->file.'.lock', function() use ($id): void {
+            $users=Files::readJson($this->file,[]);
+            foreach($users as &$row){
+                if(($row['id']??'')!==$id)continue;
+                unset($row['totpSecret']);
+                $row['totpEnabled']=true;
+                break;
+            }
+            unset($row);
+            Files::writeJson($this->file,$users);
+        });
     }
 }

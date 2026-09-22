@@ -44,11 +44,13 @@ jobs:
           test -f verified-release/public/index.html
           test -f verified-release/public/.htaccess
           test -f verified-release/public/api/session.php
+          test -f verified-release/public/api/deployment-jobs.php
           test -f verified-release/private/app/php/bootstrap.php
           test -f verified-release/private/build/release.json
           grep -F "RewriteBase /digiops/" verified-release/public/.htaccess
           grep -F "RewriteRule ^api/ - [L]" verified-release/public/.htaccess
           grep -F "RewriteRule ^ index.html [L]" verified-release/public/.htaccess
+          grep -F "Content-Security-Policy" verified-release/public/.htaccess
           grep -E 'src="/digiops/assets/|href="/digiops/' verified-release/public/index.html
           echo "Uploaded artifact certification: PASS"
 
@@ -62,10 +64,13 @@ jobs:
           extensions: curl, zip, sodium
       - name: PHP lint
         run: find app public tools agent -name '*.php' -print0 | xargs -0 -n1 php -l
-      - name: Path guard tests
-        run: php tests/php/PathGuardTest.php
-      - name: Deployment candidate selector tests
-        run: php tests/php/DeploymentCandidateSelectorTest.php
+      - name: PHP behavioral tests
+        run: |
+          set -e
+          for test in tests/php/*Test.php; do
+            echo "Running $test"
+            php "$test"
+          done
 
   security:
     runs-on: ubuntu-latest

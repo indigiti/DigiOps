@@ -14,10 +14,11 @@ final class RateLimiter
         Files::ensureDir($dir);
         $file = $dir . '/' . $key . '.json';
         $now = time();
-        $data = Files::readJson($file, ['window' => $now, 'count' => 0]);
-        if ($now - (int)($data['window'] ?? 0) >= $windowSeconds) $data = ['window' => $now, 'count' => 0];
-        $data['count'] = (int)($data['count'] ?? 0) + 1;
-        Files::writeJson($file, $data);
-        return $data['count'] <= $limit;
+        $data = Files::mutateJson($file, ['window'=>$now,'count'=>0], static function(array $data) use ($now,$windowSeconds): array {
+            if ($now - (int)($data['window'] ?? 0) >= $windowSeconds) $data = ['window'=>$now,'count'=>0];
+            $data['count'] = (int)($data['count'] ?? 0) + 1;
+            return $data;
+        });
+        return (int)($data['count'] ?? 0) <= $limit;
     }
 }

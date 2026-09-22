@@ -19,6 +19,73 @@ final class TargetRegistry
 
     public function all(): array
     {
+        return $this->allUnlocked();
+    }
+
+    public function find(string $id): ?array
+    {
+        $id=PathGuard::slug($id);
+        foreach($this->allUnlocked() as $target) if($target['id']===$id) return $target;
+        return null;
+    }
+
+    public function upsert(array $input): array
+    {
+        $record=$this->normalize($input);
+        if ($record['id']==='local') throw new RuntimeException('LOCAL_TARGET_IMMUTABLE');
+
+        Files::withLock($this->file . '.lock', function() use ($record): void {
+            $all=array_values(array_filter($this->allUnlocked(),fn(array $t):bool=>$t['id']!=='local'));
+            $found=false;
+            foreach($all as $i=>$target){
+                if($target['id']===$record['id']){
+                    $all[$i]=array_merge($target,$record);
+                    $found=true;
+                    break;
+                }
+            }
+            if(!$found)$all[]=$record;
+            Files::writeJson($this->file,$all);
+        });
+
+        return $record;
+    }
+
+    public function patchRuntime(string $id,array $patch): array
+    {
+        $id=PathGuard::slug($id);
+        if($id==='local') return $this->find('local') ?? throw new RuntimeException('TARGET_NOT_FOUND');
+
+        return Files::withLock($this->file . '.lock', function() use ($id,$patch): array {
+            $all=array_values(array_filter($this->allUnlocked(),fn(array $t):bool=>$t['id']!=='local'));
+            $updated=null;
+            foreach($all as $i=>$target){
+                if($target['id']!==$id) continue;
+                $updated=$this->normalize(array_merge(
+                    $target,
+                    array_intersect_key($patch,array_flip(['status','capabilities','lastVerified','latencyMs','agentVersion']))
+                ));
+                $all[$i]=$updated;
+                break;
+            }
+            if($updated===null) throw new RuntimeException('TARGET_NOT_FOUND');
+            Files::writeJson($this->file,$all);
+            return $updated;
+        });
+    }
+
+    public function delete(string $id): void
+    {
+        $id=PathGuard::slug($id);
+        if($id==='local') throw new RuntimeException('LOCAL_TARGET_IMMUTABLE');
+        Files::withLock($this->file . '.lock', function() use ($id): void {
+            $all=array_values(array_filter($this->allUnlocked(),fn(array $t):bool=>$t['id']!=='local' && $t['id']!==$id));
+            Files::writeJson($this->file,$all);
+        });
+    }
+
+    private function allUnlocked(): array
+    {
         $saved = Files::readJson($this->file, []);
         $targets = [[
             'id'=>'local',
@@ -41,51 +108,6 @@ final class TargetRegistry
         return $targets;
     }
 
-    public function find(string $id): ?array
-    {
-        $id=PathGuard::slug($id);
-        foreach($this->all() as $target) if($target['id']===$id) return $target;
-        return null;
-    }
-
-    public function upsert(array $input): array
-    {
-        $record=$this->normalize($input);
-        if ($record['id']==='local') throw new RuntimeException('LOCAL_TARGET_IMMUTABLE');
-
-        $all=array_values(array_filter($this->all(),fn(array $t):bool=>$t['id']!=='local'));
-        $found=false;
-        foreach($all as $i=>$target){
-            if($target['id']===$record['id']){
-                $all[$i]=array_merge($target,$record);
-                $found=true;
-                break;
-            }
-        }
-        if(!$found)$all[]=$record;
-        Files::writeJson($this->file,$all);
-        return $record;
-    }
-
-    public function patchRuntime(string $id,array $patch): array
-    {
-        $current=$this->find($id);
-        if(!$current) throw new RuntimeException('TARGET_NOT_FOUND');
-        if($id==='local') return $current;
-        return $this->upsert(array_merge(
-            $current,
-            array_intersect_key($patch,array_flip(['status','capabilities','lastVerified','latencyMs','agentVersion']))
-        ));
-    }
-
-    public function delete(string $id): void
-    {
-        $id=PathGuard::slug($id);
-        if($id==='local') throw new RuntimeException('LOCAL_TARGET_IMMUTABLE');
-        $all=array_values(array_filter($this->all(),fn(array $t):bool=>$t['id']!=='local' && $t['id']!==$id));
-        Files::writeJson($this->file,$all);
-    }
-
     private function normalize(array $input): array
     {
         $id=PathGuard::slug((string)($input['id']??$input['name']??''));
@@ -93,7 +115,7 @@ final class TargetRegistry
         if(!in_array($type,['agent'],true)) throw new InvalidArgumentException('INVALID_TARGET_TYPE');
 
         $endpoint=rtrim(trim((string)($input['endpoint']??'')),'/');
-        if($endpoint==='' || !preg_match('#^https://#i',$endpoint)) throw new InvalidArgumentException('TARGET_HTTPS_ENDPOINT_REQUIRED');
+        if($id!=='local' && ($endpoint==='' || !preg_match('#^https://#i',$endpoint))) throw new InvalidArgumentException('TARGET_HTTPS_ENDPOINT_REQUIRED');
 
         $publicBase=trim(str_replace('\\','/',(string)($input['publicBase']??'public_html')),'/');
         $privateBase=trim(str_replace('\\','/',(string)($input['privateBase']??'private_html')),'/');
@@ -104,8 +126,8 @@ final class TargetRegistry
         return [
             'id'=>$id,
             'name'=>trim((string)($input['name']??$id)) ?: $id,
-            'type'=>$type,
-            'status'=>(string)($input['status']??'unverified'),
+            'type'=>$id==='local'?'local':$type,
+            'status'=>(string)($input['status']??($id==='local'?'connected':'unverified')),
             'endpoint'=>$endpoint,
             'publicBase'=>$publicBase,
             'privateBase'=>$privateBase,

@@ -19,6 +19,73 @@ final class ProjectRegistry
 
     public function all(): array
     {
+        return $this->allUnlocked();
+    }
+
+    public function find(string $id): ?array
+    {
+        $id = PathGuard::slug($id);
+        foreach ($this->allUnlocked() as $project) if ($project['id'] === $id) return $project;
+        return null;
+    }
+
+    public function upsert(array $input): array
+    {
+        $record = $this->normalize($input);
+        $this->validateRecord($record);
+
+        Files::withLock($this->file . '.lock', function() use ($record): void {
+            $all = $this->allUnlocked();
+            $found = false;
+            foreach ($all as $i => $project) {
+                if ($project['id'] === $record['id']) {
+                    $all[$i] = array_merge($project, $record);
+                    $found = true;
+                    break;
+                }
+            }
+            if (!$found) $all[] = $record;
+            Files::writeJson($this->file, $all);
+        });
+
+        return $record;
+    }
+
+    public function delete(string $id): void
+    {
+        $id = PathGuard::slug($id);
+        Files::withLock($this->file . '.lock', function() use ($id): void {
+            $all = array_values(array_filter($this->allUnlocked(), fn(array $p): bool => $p['id'] !== $id));
+            Files::writeJson($this->file, $all);
+        });
+    }
+
+    public function patchRuntime(string $id, array $patch): array
+    {
+        $id = PathGuard::slug($id);
+        $allowed = array_flip([
+            'status','health','healthCheckedAt','update','commit','release','lastDeploy',
+            'stack','environment'
+        ]);
+
+        return Files::withLock($this->file . '.lock', function() use ($id,$patch,$allowed): array {
+            $all = $this->allUnlocked();
+            $updated = null;
+            foreach ($all as $i => $project) {
+                if ($project['id'] !== $id) continue;
+                $updated = $this->normalize(array_merge($project, array_intersect_key($patch, $allowed)));
+                $this->validateRecord($updated);
+                $all[$i] = $updated;
+                break;
+            }
+            if ($updated === null) throw new RuntimeException('PROJECT_NOT_FOUND');
+            Files::writeJson($this->file, $all);
+            return $updated;
+        });
+    }
+
+    private function allUnlocked(): array
+    {
         $items = [];
         foreach (Files::readJson($this->file, []) as $project) {
             if (!is_array($project)) continue;
@@ -27,41 +94,10 @@ final class ProjectRegistry
         return $items;
     }
 
-    public function find(string $id): ?array
+    private function validateRecord(array $record): void
     {
-        $id = PathGuard::slug($id);
-        foreach ($this->all() as $project) if ($project['id'] === $id) return $project;
-        return null;
-    }
-
-    public function upsert(array $input): array
-    {
-        $record = $this->normalize($input);
         if (!preg_match('#^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$#', $record['repo'])) throw new InvalidArgumentException('INVALID_REPOSITORY');
         if (!preg_match('/^[A-Za-z0-9._\/-]{1,160}$/', $record['branch'])) throw new InvalidArgumentException('INVALID_BRANCH');
-
-        $all = $this->all();
-        $found = false;
-        foreach ($all as $i => $project) {
-            if ($project['id'] === $record['id']) { $all[$i] = array_merge($project, $record); $found = true; break; }
-        }
-        if (!$found) $all[] = $record;
-        Files::writeJson($this->file, $all);
-        return $record;
-    }
-
-    public function delete(string $id): void
-    {
-        $id = PathGuard::slug($id);
-        $all = array_values(array_filter($this->all(), fn(array $p): bool => $p['id'] !== $id));
-        Files::writeJson($this->file, $all);
-    }
-
-    public function patchRuntime(string $id, array $patch): array
-    {
-        $current = $this->find($id);
-        if (!$current) throw new RuntimeException('PROJECT_NOT_FOUND');
-        return $this->upsert(array_merge($current, array_intersect_key($patch, array_flip(['status','health','update','commit','release','lastDeploy','stack','environment']))));
     }
 
     private function normalize(array $project): array
@@ -94,6 +130,7 @@ final class ProjectRegistry
             'privatePath' => $privatePath,
             'status' => (string)($project['status'] ?? 'configured'),
             'health' => (string)($project['health'] ?? 'pending'),
+            'healthCheckedAt' => $project['healthCheckedAt'] ?? null,
             'update' => (bool)($project['update'] ?? false),
             'commit' => (string)($project['commit'] ?? '—'),
             'release' => (string)($project['release'] ?? 'Not deployed'),
