@@ -34,13 +34,13 @@ $jobs=new DeploymentJobRepository();
 $reply=static function(array $payload,int $http=200) use ($jobs,$requestId): never {
     if($requestId!=='' && isset($payload['state'])){
         $state=(string)$payload['state'];
-        $patch=[
-            'state'=>$state,
-            'phase'=>(string)($payload['phase']??($state==='deployed'?'complete':$state)),
-            'progress'=>(int)($payload['progress']??($state==='deployed'||$state==='failed'?100:0)),
-            'release'=>(string)($payload['release']??''),
-            'error'=>(string)($payload['error']??''),
-        ];
+        $patch=['state'=>$state];
+        if(isset($payload['phase']))$patch['phase']=(string)$payload['phase'];
+        elseif($state==='deployed')$patch['phase']='complete';
+        if(isset($payload['progress']))$patch['progress']=(int)$payload['progress'];
+        elseif(in_array($state,['deployed','failed'],true))$patch['progress']=100;
+        if(isset($payload['release']))$patch['release']=(string)$payload['release'];
+        if(isset($payload['error']))$patch['error']=(string)$payload['error'];
         if(in_array($state,['deployed','failed'],true))$patch['completedAt']=date(DATE_ATOM);
         try{$jobs->patch($requestId,$patch);}catch(Throwable){}
     }
