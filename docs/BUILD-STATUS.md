@@ -23,6 +23,7 @@
 - [x] Rollback uses the same operation lock
 - [x] Pre-deploy snapshot
 - [x] Transactional public-directory switch
+- [x] Private overlay preflight, exact copy-path diagnostics, and rollback on pre-cutover publication failure
 - [x] Automatic restoration if final cutover rename fails
 - [x] Same transactional switch on remote agent
 - [x] Remote capability gate for transactional publication
