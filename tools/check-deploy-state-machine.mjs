@@ -9,9 +9,9 @@ const releaseManager=read('app/php/src/Deploy/ReleaseManager.php');
 const deploy=read('public/api/deploy.php');
 
 const checks=[
-  ['UI reconciles aborted deploys', ui.includes("aborted?'DEPLOY_RESPONSE_TIMEOUT'") && ui.includes("status.state==='deployed'")],
-  ['UI follows running agent state', ui.includes("status.state==='running'") && ui.includes("status.state==='failed'") && ui.includes('attempt<=120')],
-  ['UI does not hard-fail a known running deployment', ui.includes("lastState==='running'") && ui.includes('no second deploy was started')],
+  ['UI hands aborted deploys to background verification', ui.includes("aborted?'DEPLOY_RESPONSE_TIMEOUT'") && ui.includes('queueDeploymentWatch')],
+  ['UI follows authoritative watcher state', ui.includes("watch.status==='deployed'") && ui.includes("watch.status==='failed'") && ui.includes("watch.status=status&&status.state")],
+  ['UI prevents duplicate deploy while verification is active', ui.includes('selectedDeploymentWatch') && ui.includes('Verification running')],
   ['Control plane requires authoritative modern-agent marker', status.includes('$agentStatusSupported') && status.includes("'source'=>'agent-current-wait'")],
   ['Control plane exposes remote running state', status.includes("'state'=>'running'") && status.includes("'source'=>'agent-progress'")],
   ['Local ReleaseManager persists deployment progress', releaseManager.includes("deployment.json") && releaseManager.includes("'snapshotting'") && releaseManager.includes("'publishing'") && releaseManager.includes("'switching'")],
