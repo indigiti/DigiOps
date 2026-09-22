@@ -14,7 +14,9 @@ final class ReleaseManager
 {
     public function __construct(
         private ProjectRegistry $projects = new ProjectRegistry(),
-        private AuditLog $audit = new AuditLog()
+        private AuditLog $audit = new AuditLog(),
+        private AtomicReleaseSwitcher $switcher = new AtomicReleaseSwitcher(),
+        private DeploymentJobRepository $jobs = new DeploymentJobRepository()
     ) {}
 
     public function deploymentState(string $projectId): array
@@ -39,6 +41,20 @@ final class ReleaseManager
         ];
         foreach($extra as $k=>$v)$payload[$k]=$v;
         Files::writeJson($file,$payload);
+        $requestId=(string)($payload['requestId']??'');
+        if(preg_match('/^[a-f0-9]{32}$/',$requestId)){
+            try{
+                $patch=[
+                    'state'=>$state,
+                    'phase'=>$phase,
+                    'progress'=>$payload['progress'],
+                    'release'=>(string)($payload['release']??''),
+                    'error'=>(string)($payload['error']??''),
+                ];
+                if($state==='deployed')$patch['completedAt']=date(DATE_ATOM);
+                $this->jobs->patch($requestId,$patch);
+            }catch(\Throwable){}
+        }
     }
 
     public function deployArtifact(string $projectId, string $zipFile, array $meta, array $user): array
@@ -113,8 +129,7 @@ final class ReleaseManager
             }
 
             $this->writeDeploymentState($slug,'running','switching',94,$stateMeta+['release'=>$releaseId]);
-            if (is_dir($publicTarget)) Files::removeTree($publicTarget);
-            if (!rename($publishTmp, $publicTarget)) throw new RuntimeException('PUBLISH_RENAME_FAILED');
+            $this->switcher->switch($publishTmp, $publicTarget, $slug);
 
             $this->projects->patchRuntime($slug, [
                 'status'=>'deployed',
@@ -160,7 +175,13 @@ final class ReleaseManager
         $slug = PathGuard::slug($projectId);
         if (!preg_match('/^[A-Za-z0-9._-]{3,100}$/', $releaseId)) throw new RuntimeException('INVALID_RELEASE_ID');
 
-        $releaseRoot = DIGIOPS_PRIVATE_ROOT . '/projects/' . $slug . '/releases/' . $releaseId;
+        $runtime = DIGIOPS_PRIVATE_ROOT . '/projects/' . $slug;
+        Files::ensureDir($runtime);
+        $lock=fopen($runtime.'/deploy.lock','c+');
+        if(!$lock || !flock($lock,LOCK_EX|LOCK_NB)) throw new RuntimeException('DEPLOYMENT_LOCKED');
+
+        try {
+        $releaseRoot = $runtime . '/releases/' . $releaseId;
         $publicSource = is_dir($releaseRoot . '/public') ? $releaseRoot . '/public' : $releaseRoot . '/payload';
         $privateSource = is_dir($releaseRoot . '/private') ? $releaseRoot . '/private' : null;
         if (!is_dir($publicSource)) throw new RuntimeException('RELEASE_NOT_FOUND');
@@ -175,8 +196,7 @@ final class ReleaseManager
             Files::copyDir($privateSource, $privateTarget);
         }
 
-        if (is_dir($publicTarget)) Files::removeTree($publicTarget);
-        if (!rename($tmp, $publicTarget)) throw new RuntimeException('ROLLBACK_FAILED');
+        $this->switcher->switch($tmp, $publicTarget, $slug);
 
         $meta = Files::readJson($releaseRoot . '/meta.json', []);
         $this->projects->patchRuntime($slug, [
@@ -193,6 +213,10 @@ final class ReleaseManager
         ], $user);
 
         return ['ok'=>true,'release'=>$releaseId];
+        } finally {
+            flock($lock,LOCK_UN);
+            fclose($lock);
+        }
     }
 
     public function releases(string $projectId): array
