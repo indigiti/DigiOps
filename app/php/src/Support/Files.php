@@ -88,10 +88,15 @@ final class Files
         }
     }
 
-    public static function copyDir(string $source, string $target): void
+    public static function copyDir(string $source, string $target, array $skipFiles = []): void
     {
         if (!is_dir($source)) throw new RuntimeException('SOURCE_DIRECTORY_MISSING');
         self::ensureDir($target);
+        $skip=[];
+        foreach($skipFiles as $relative){
+            $relative=str_replace('\\','/',ltrim((string)$relative,'/'));
+            if($relative!=='')$skip[$relative]=true;
+        }
         $it = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($source, \FilesystemIterator::SKIP_DOTS | \FilesystemIterator::CURRENT_AS_FILEINFO | \FilesystemIterator::KEY_AS_PATHNAME),
             \RecursiveIteratorIterator::SELF_FIRST
@@ -105,6 +110,7 @@ final class Files
                 self::ensureDir($dest);
                 continue;
             }
+            if (isset($skip[$relative])) continue;
             if (is_dir($dest)) throw new RuntimeException('COPY_TYPE_CONFLICT_EXPECTED_FILE:'.$relative);
             self::ensureDir(dirname($dest));
             if (!is_readable($item->getPathname())) throw new RuntimeException('COPY_SOURCE_NOT_READABLE:'.$relative);
@@ -131,6 +137,7 @@ final class Files
         self::ensureDir($backupRoot,0700);
 
         $existingFiles=[];
+        $unchangedFiles=[];
         $newFiles=[];
         $newDirs=[];
         $it = new \RecursiveIteratorIterator(
@@ -153,6 +160,25 @@ final class Files
 
             if (is_file($dest)) {
                 if (!is_readable($dest)) throw new RuntimeException('OVERLAY_EXISTING_FILE_NOT_READABLE:'.$relative);
+
+                $sourceHash=@hash_file('sha256',$item->getPathname());
+                $destHash=@hash_file('sha256',$dest);
+                if(is_string($sourceHash)&&is_string($destHash)&&$sourceHash!==''&&$destHash!==''&&hash_equals($sourceHash,$destHash)){
+                    // A retry may encounter an immutable release file that is
+                    // already present and currently executing. Identical bytes
+                    // are already satisfied and must never be recopied.
+                    $unchangedFiles[]=$relative;
+                    continue;
+                }
+
+                $normalized=str_replace('\\','/',$relative);
+                if(str_starts_with($normalized,'go-engine/bin/releases/')){
+                    // Immutable release paths may never be changed in place.
+                    // A different byte stream at the same release path means
+                    // the package/release identity is inconsistent.
+                    throw new RuntimeException('IMMUTABLE_RELEASE_COLLISION:'.$relative);
+                }
+
                 if (!is_writable($dest)) throw new RuntimeException('OVERLAY_EXISTING_FILE_NOT_WRITABLE:'.$relative);
                 $backup=$backupRoot . DIRECTORY_SEPARATOR . str_replace('/',DIRECTORY_SEPARATOR,$relative);
                 self::ensureDir(dirname($backup),0700);
@@ -171,6 +197,7 @@ final class Files
             'target'=>$target,
             'backupRoot'=>$backupRoot,
             'existingFiles'=>$existingFiles,
+            'unchangedFiles'=>$unchangedFiles,
             'newFiles'=>$newFiles,
             'newDirs'=>$newDirs,
         ];
@@ -179,7 +206,7 @@ final class Files
     public static function applyOverlay(array $plan): void
     {
         try {
-            self::copyDir((string)$plan['source'],(string)$plan['target']);
+            self::copyDir((string)$plan['source'],(string)$plan['target'],(array)($plan['unchangedFiles']??[]));
         } catch (\Throwable $e) {
             try { self::rollbackOverlay($plan); }
             catch (\Throwable $restore) {
