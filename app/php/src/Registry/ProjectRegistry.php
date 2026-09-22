@@ -87,9 +87,10 @@ final class ProjectRegistry
     private function allUnlocked(): array
     {
         $items = [];
-        foreach (Files::readJson($this->file, []) as $project) {
-            if (!is_array($project)) continue;
-            try { $items[] = $this->normalize($project); } catch (\Throwable) {}
+        foreach (Files::readJsonStrict($this->file, []) as $project) {
+            if (!is_array($project)) throw new RuntimeException('PROJECT_REGISTRY_INVALID');
+            try { $items[] = $this->normalize($project); }
+            catch (\Throwable $e) { throw new RuntimeException('PROJECT_REGISTRY_INVALID',0,$e); }
         }
         return $items;
     }

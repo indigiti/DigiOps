@@ -2,7 +2,7 @@
 
 ## Release
 
-**v1.8.0 — Verification Center**
+**v1.8.1 — Deployment Diagnostics & State Integrity**
 
 ## Control plane
 
@@ -13,6 +13,8 @@
 - [x] Background verification recoverable across browser reload/device changes
 - [x] Post-deploy health attached to deployment jobs
 - [x] Durable checkpoint-by-checkpoint verification ledger with exact failure stage and evidence source
+- [x] Deployment and post-deploy health outcomes are reported independently
+- [x] Only uncertain remote commit responses enter authoritative confirmation
 - [x] Health freshness retained in project registry
 
 ## Publication safety
@@ -24,6 +26,8 @@
 - [x] Automatic restoration if final cutover rename fails
 - [x] Same transactional switch on remote agent
 - [x] Remote capability gate for transactional publication
+- [x] Remote agent independently enforces public_html/private_html path roots
+- [x] DigiOps private release payload is limited to deployable `app/`, `agent/`, and `build/` roots so persistent state cannot be overlaid
 - [x] ZIP traversal and symlink rejection
 - [x] Payload entrypoint validation
 - [x] Local storage/disk preflight
@@ -39,6 +43,7 @@
 ## State integrity
 
 - [x] Atomic JSON writes
+- [x] Critical project/target/vault JSON state fails closed on corruption
 - [x] Locked project registry mutations
 - [x] Locked target registry mutations
 - [x] Locked rate-limit counters

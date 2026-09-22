@@ -21,7 +21,8 @@ final class SecretVault
     {
         if (!preg_match('/^[a-z0-9._-]{2,80}$/i', $name)) throw new RuntimeException('INVALID_SECRET_NAME');
         $encrypted=$this->encrypt($value);
-        Files::mutateJson($this->file, [], static function(array $all) use ($name,$encrypted): array {
+        Files::mutateJsonStrict($this->file, [], static function(array $all) use ($name,$encrypted): array {
+            self::assertStore($all);
             $all[$name]=$encrypted;
             return $all;
         });
@@ -29,14 +30,17 @@ final class SecretVault
 
     public function get(string $name): ?string
     {
-        $all = Files::readJson($this->file, []);
-        if (!isset($all[$name]) || !is_array($all[$name])) return null;
+        $all = Files::readJsonStrict($this->file, []);
+        self::assertStore($all);
+        if (!array_key_exists($name,$all)) return null;
+        if (!is_array($all[$name])) throw new RuntimeException('SECRET_RECORD_INVALID');
         return $this->decrypt($all[$name]);
     }
 
     public function delete(string $name): void
     {
-        Files::mutateJson($this->file, [], static function(array $all) use ($name): array {
+        Files::mutateJsonStrict($this->file, [], static function(array $all) use ($name): array {
+            self::assertStore($all);
             unset($all[$name]);
             return $all;
         });
@@ -45,6 +49,13 @@ final class SecretVault
     public function has(string $name): bool
     {
         return $this->get($name) !== null;
+    }
+
+    private static function assertStore(array $all): void
+    {
+        foreach($all as $name=>$record){
+            if(!is_string($name) || !is_array($record)) throw new RuntimeException('SECRET_VAULT_INVALID');
+        }
     }
 
     private function loadKey(): string

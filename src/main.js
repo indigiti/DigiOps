@@ -45,7 +45,12 @@ const api=async(url,options={})=>{
     const type=(res.headers.get('content-type')||'unknown').split(';')[0].replace(/[^a-z0-9.+/-]/gi,'_')
     throw new Error('INVALID_RESPONSE_HTTP_'+res.status+'_TYPE_'+type+'_BYTES_'+raw.length)
   }
-  if(!res.ok) throw new Error(data.error||('HTTP_'+res.status))
+  if(!res.ok){
+    const error=new Error(data.error||('HTTP_'+res.status))
+    error.httpStatus=res.status
+    error.payload=data
+    throw error
+  }
   return data
 }
 
@@ -849,17 +854,33 @@ function app(){
         this.setOperation(97,'Refreshing release history…')
         await this.loadReleases(true)
         this.setOperation(99,'Running post-deploy health check…')
-        await this.checkHealth(true)
+        const healthOk=await this.checkHealth(true,requestId)
         this.clearDeploymentWatch(requestId)
-        this.notice='Deployed release '+d.release
-        this.completeOperation('Deployment complete and health check finished.')
+        if(healthOk){
+          this.notice='Deployment completed successfully · release '+d.release+' · health verified.'
+          this.completeOperation('Deployment complete and health verified.')
+        }else{
+          this.notice='Deployment completed successfully · release '+d.release+' · post-deploy health needs attention.'
+          this.completeOperation('Deployment complete. Health verification needs attention.')
+        }
       }catch(e){
         clearTimeout(deployResponseTimer)
         const aborted=e && e.name==='AbortError'
         const transportError=aborted?'DEPLOY_RESPONSE_TIMEOUT':e.message
-        const ambiguous=aborted || /INVALID_RESPONSE|TARGET_CONNECT_FAILED|HTTP_50[234]|Failed to fetch|NetworkError/i.test(transportError)
+        const payload=e&&e.payload&&typeof e.payload==='object'?e.payload:null
+        if(transportError==='DEPLOYMENT_ALREADY_ACTIVE' && payload&&payload.requestId){
+          this.clearDeploymentWatch(requestId)
+          await this.syncDeploymentWatches()
+          this.verificationJobId=String(payload.requestId)
+          this.error=''
+          this.notice='Another deployment is already active. Open Verification to follow the existing request before retrying.'
+          this.completeOperation('Existing deployment is still active; duplicate deployment was blocked safely.')
+          return
+        }
+        const serverUnavailable=payload&&payload.state==='unavailable'
+        const networkFailure=!e.httpStatus && /Failed to fetch|NetworkError|Load failed/i.test(transportError)
+        const ambiguous=aborted || networkFailure || serverUnavailable
         let reconciled=false
-        let remoteFailed=''
         if(ambiguous && requestedCommit){
           this.stopOperationTimer()
           this.queueDeploymentWatch({
@@ -869,22 +890,24 @@ function app(){
             requestId,
             run:requestedRun,
             artifact:requestedArtifact,
-            status:'queued',
-            phase:'authoritative-confirmation',
-            progress:84
+            status:serverUnavailable?'unavailable':'queued',
+            phase:payload&&payload.phase?String(payload.phase):'authoritative-confirmation',
+            progress:Number(payload&&payload.progress)||84
           })
           this.error=''
           this.notice='Deployment handed off. You can continue using DigiOps; verification will continue automatically.'
           this.completeOperation('Deployment continues on the server. Background verification is active.')
           reconciled=true
         }
-        if(remoteFailed){
-          this.error=remoteFailed
-          this.failOperation('Deployment failed on target: '+remoteFailed)
-        }else if(!reconciled){
+        if(!reconciled){
           this.clearDeploymentWatch(requestId)
+          const failedPhase=payload&&payload.phase?String(payload.phase).replace(/[-_]+/g,' '):''
           this.error=transportError
-          this.failOperation('Deployment failed before it could be handed off for authoritative verification.')
+          if(transportError==='DEPLOYMENT_LOCKED'){
+            this.failOperation('Deployment blocked: another deployment or rollback is still active. Open Verification before retrying.')
+          }else{
+            this.failOperation('Deployment failed'+(failedPhase?' at '+failedPhase:'')+': '+transportError)
+          }
         }
       }finally{clearTimeout(deployResponseTimer);this.busy=false;icons()}
     },
@@ -911,14 +934,16 @@ function app(){
         this.error=e.message;this.failOperation('Rollback failed: '+e.message)
       }finally{this.busy=false;icons()}
     },
-    async checkHealth(silent=false){
+    async checkHealth(silent=false,requestId=''){
       if(!this.selected)return false
       if(!silent){
         this.clearMessages();this.busy=true
         this.startOperation('health','Running health check','Checking HTTP, storage and runtime status…',20,false)
       }
       try{
-        this.health=await this.singleFlight('health:'+this.selected.id,()=>api('./api/health.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id})}))
+        const healthPayload={project:this.selected.id}
+        if(requestId)healthPayload.requestId=requestId
+        this.health=await this.singleFlight('health:'+this.selected.id+'|'+requestId,()=>api('./api/health.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify(healthPayload)}))
         this.cachePut('health',this.selected.id,this.health)
         if(!silent)this.setOperation(78,'Refreshing application health state…')
         await this.loadProjects()

@@ -35,9 +35,14 @@ final class ManagedFileBrowser
         if ($relative==='' || $relative==='.') return $root;
         if (str_starts_with($relative,'/') || str_contains($relative,'..') || !preg_match('#^[A-Za-z0-9._/-]+$#',$relative)) throw new RuntimeException('INVALID_PATH');
         $candidate=$root.'/'.trim($relative,'/');
-        $parent=realpath(dirname($candidate));
         $rootReal=realpath($root) ?: $root;
-        if ($parent!==false && !str_starts_with($parent,$rootReal)) throw new RuntimeException('PATH_ESCAPE');
+        $resolved=realpath($candidate);
+        if($resolved!==false){
+            if($resolved!==$rootReal && !str_starts_with($resolved,$rootReal.DIRECTORY_SEPARATOR)) throw new RuntimeException('PATH_ESCAPE');
+            return $resolved;
+        }
+        $parent=realpath(dirname($candidate));
+        if ($parent!==false && $parent!==$rootReal && !str_starts_with($parent,$rootReal.DIRECTORY_SEPARATOR)) throw new RuntimeException('PATH_ESCAPE');
         return $candidate;
     }
 }

@@ -86,7 +86,7 @@ final class TargetRegistry
 
     private function allUnlocked(): array
     {
-        $saved = Files::readJson($this->file, []);
+        $saved = Files::readJsonStrict($this->file, []);
         $targets = [[
             'id'=>'local',
             'name'=>'This Cloudways application',
@@ -99,11 +99,13 @@ final class TargetRegistry
             'lastVerified'=>null,
         ]];
         foreach ($saved as $target) {
-            if (!is_array($target)) continue;
+            if (!is_array($target)) throw new RuntimeException('TARGET_REGISTRY_INVALID');
             try {
                 $record=$this->normalize($target);
                 if ($record['id']!=='local') $targets[]=$record;
-            } catch (\Throwable) {}
+            } catch (\Throwable $e) {
+                throw new RuntimeException('TARGET_REGISTRY_INVALID',0,$e);
+            }
         }
         return $targets;
     }

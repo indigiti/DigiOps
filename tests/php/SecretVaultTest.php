@@ -54,5 +54,14 @@ if(function_exists('pcntl_fork')){
 $vault->delete('alpha');
 if($vault->get('alpha')!==null || $vault->get('beta')!=='two') throw new RuntimeException('VAULT_DELETE_FAILED');
 
+file_put_contents($file,'{broken');
+try{
+    (new SecretVault($file))->put('gamma','three');
+    throw new RuntimeException('CORRUPT_VAULT_OVERWRITTEN');
+}catch(RuntimeException $e){
+    if($e->getMessage()!=='JSON_STATE_INVALID') throw $e;
+}
+if(file_get_contents($file)!=='{broken') throw new RuntimeException('CORRUPT_VAULT_MUTATED');
+
 Files::removeTree($root);
 echo "SecretVaultTest PASS\n";
