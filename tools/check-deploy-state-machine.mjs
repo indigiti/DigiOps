@@ -6,6 +6,7 @@ const status=read('public/api/deploy-status.php');
 const agent=read('agent/digiops-agent.php');
 const client=read('app/php/src/Targets/RemoteAgentClient.php');
 const releaseManager=read('app/php/src/Deploy/ReleaseManager.php');
+const deploy=read('public/api/deploy.php');
 
 const checks=[
   ['UI reconciles aborted deploys', ui.includes("aborted?'DEPLOY_RESPONSE_TIMEOUT'") && ui.includes("status.state==='deployed'")],
@@ -20,6 +21,10 @@ const checks=[
   ['Agent status returns current and deployment records', agent.includes("ok(['current'=>$current,'deployment'=>$deployment])")],
   ['Agent blocks duplicate active deploys', agent.includes('DEPLOYMENT_ALREADY_RUNNING') && agent.includes('deploymentStateIsActive')],
   ['Remote commit timeout exceeds browser response window', client.includes("'deploy-commit'=>300")],
+  ['Deployments carry request identity end-to-end', ui.includes('deploymentRequestId') && ui.includes('requestId})') && deploy.includes("'requestId'=>$requestId") && status.includes('$deploymentRequestId') && releaseManager.includes("'requestId'") && agent.includes("'requestId'")],
+  ['Same-commit retries cannot use registry-only confirmation', status.includes("$requestId==='' && $registryCommit===$commit")],
+  ['Preflight requires request-aware deployment agent', deploy.includes("'deployment-request-id'") && agent.includes("'deployment-request-id'")],
+  ['Preflight checks local deployment prerequisites', deploy.includes('PREFLIGHT_ZIP_EXTENSION_MISSING') && deploy.includes('PREFLIGHT_PRIVATE_STORAGE_NOT_WRITABLE') && deploy.includes('PREFLIGHT_DISK_SPACE_LOW')],
 ];
 
 const failed=checks.filter(([,ok])=>!ok).map(([name])=>name);
