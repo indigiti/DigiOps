@@ -1,13 +1,28 @@
 import Alpine from '@alpinejs/csp'
-import { createIcons, Activity, AppWindow, ArrowLeft, Boxes, CheckCircle2, ChevronDown, CircleGauge, Cloud, FileClock, FileText, FolderGit2, GitBranch, Github, Globe2, HardDrive, HeartPulse, History, LayoutDashboard, ListFilter, LockKeyhole, LogOut, Menu, MoreVertical, PackageCheck, Plus, RefreshCw, Rocket, Search, Server, Settings2, ShieldCheck, UserRound, X, Zap } from 'lucide'
+import { createIcons, Activity, AppWindow, ArrowLeft, BookOpen, Boxes, CheckCircle2, ChevronDown, CircleGauge, CircleHelp, Cloud, FileClock, FileText, FolderGit2, GitBranch, Github, Globe2, HardDrive, HeartPulse, History, LayoutDashboard, ListFilter, LockKeyhole, LogOut, Menu, MoreVertical, PackageCheck, Plus, RefreshCw, Rocket, Search, Server, Settings2, ShieldCheck, UserRound, X, Zap } from 'lucide'
 import './styles.css'
 
 window.Alpine = Alpine
-const ICONS={Activity,AppWindow,ArrowLeft,Boxes,CheckCircle2,ChevronDown,CircleGauge,Cloud,FileClock,FileText,FolderGit2,GitBranch,Github,Globe2,HardDrive,HeartPulse,History,LayoutDashboard,ListFilter,LockKeyhole,LogOut,Menu,MoreVertical,PackageCheck,Plus,RefreshCw,Rocket,Search,Server,Settings2,ShieldCheck,UserRound,X,Zap}
+const ICONS={Activity,AppWindow,ArrowLeft,BookOpen,Boxes,CheckCircle2,ChevronDown,CircleGauge,CircleHelp,Cloud,FileClock,FileText,FolderGit2,GitBranch,Github,Globe2,HardDrive,HeartPulse,History,LayoutDashboard,ListFilter,LockKeyhole,LogOut,Menu,MoreVertical,PackageCheck,Plus,RefreshCw,Rocket,Search,Server,Settings2,ShieldCheck,UserRound,X,Zap}
 const icons=()=>queueMicrotask(()=>createIcons({icons:ICONS}))
 const APP_BASE=(import.meta.env.BASE_URL||'/digiops/').replace(/\/+$/,'')+'/'
 const appUrl=(path='')=>APP_BASE+String(path||'').replace(/^\/+/,'')
 const deploymentRequestId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('')
+
+const HELP_TOPICS={
+  dashboard:{title:'Command Center',intro:'A last-known operational summary. Opening this page does not fan out to GitHub or remote targets.',items:['Attention shows applications that need review.','Updates are known deployable builds detected during an explicit update check.','Pending means health has not been verified yet.','Use Deployment Center for release activity and Health & Readiness for fleet condition.']},
+  projects:{title:'Applications',intro:'Each application maps one repository to isolated public/private deployment paths.',items:['Open an application to inspect its source, deployment, releases, files and health.','Search works across application name, repository, URL and branch.','Application cards show last-known state only; expensive remote checks stay on demand.']},
+  deployments:{title:'Deployment Center',intro:'A fleet-level view of recent releases and applications with known deployable updates.',items:['Review a candidate before deployment.','DigiOps snapshots the current public release before publishing.','If a browser response is interrupted, the authoritative server-side deployment state is followed instead of starting a duplicate deployment.']},
+  health:{title:'Health & Readiness',intro:'Fleet health is deliberately last-known until you explicitly check an application.',items:['Healthy means the most recent probe passed.','Attention means the most recent probe needs review.','Pending means no recent authoritative health result is stored.','Open an application health tab to run a fresh probe.']},
+  targets:{title:'Deployment Targets',intro:'Targets are local or remote execution nodes used by registered applications.',items:['Remote targets use a signed DigiOps agent.','Test a target before assigning important applications.','Agent version and capabilities determine whether safe deployment confirmation is available.']},
+  settings:{title:'Connections & Runtime',intro:'External connections and infrastructure policies live here.',items:['GitHub access is used only for explicit repository/workflow actions.','Redis credentials are encrypted in private storage.','DigiOps should bypass Varnish because it is an authenticated control plane.','Runtime identity confirms the exact build running on the server.']},
+  audit:{title:'Audit & Governance',intro:'Operational events are recorded for traceability.',items:['Use the audit log to correlate operator actions with deployments and target changes.','Build source, artifact ID and deployment metadata should be retained as the release chain of custody.']},
+  project:{title:'Application Workspace',intro:'Everything affecting one application is grouped into clear operational tabs.',items:['Overview: current configuration and source state.','Deploy: exact workflow, artifact and commit candidate.','Releases: rollback history.','Files: managed public/private file listing.','Health: explicit runtime probe.','Settings: deployment mapping.']},
+  deploy:{title:'Deploy Tab',intro:'Deploy only an exact successful workflow artifact.',items:['Check update first to resolve the exact candidate.','Workflow run, artifact ID and commit are revalidated by the server before deployment.','A preflight checks target capabilities and local prerequisites before mutation begins.']},
+  releases:{title:'Releases',intro:'Release history is the rollback safety layer.',items:['Current identifies the active release.','Snapshot entries are pre-deploy safety copies.','Rollback publishes a selected stored release and then refreshes application state.']},
+  files:{title:'Files',intro:'Read-only managed file visibility for deployed public/private paths.',items:['The source artifact remains the source of truth.','Browser file mutation is intentionally excluded to avoid configuration drift.']},
+  guide:{title:'DigiOps Guide',intro:'Use this area as the operating manual for common DigiOps workflows.',items:['Start with Command Center for state.','Use Applications for app-specific work.','Use Deployment Center and Health & Readiness for fleet operations.','Infrastructure and Governance are separated from day-to-day deployment work.']}
+}
 
 const renderNativePathPreview=()=>{
   const slugInput=document.getElementById('digiops-app-slug')
@@ -36,7 +51,7 @@ const api=async(url,options={})=>{
 function app(){
   return {
     ready:false, installed:false, user:null, csrf:null, authMode:'login',
-    sidebarOpen:false, page:'dashboard', projectTab:'overview', query:'', filter:'all', routeReady:false,
+    sidebarOpen:false, helpOpen:false, helpTopic:'dashboard', page:'dashboard', projectTab:'overview', query:'', filter:'all', routeReady:false,
     projects:[], targets:[], selectedId:null, releases:[], githubInfo:null, fileListing:null, health:null, audit:[],
     detailCache:{github:{},releases:{},health:{},files:{}}, requestPool:{},
     modal:null, busy:false, notice:'', error:'', operationTimer:null,
@@ -146,6 +161,31 @@ function app(){
         remoteTargets:this.targets.filter(t=>t.id!=='local').length
       }
     },
+    get pageTitle(){
+      const titles={dashboard:'Command Center',projects:'Applications',deployments:'Deployment Center','health-center':'Health & Readiness',targets:'Deployment Targets',settings:'Connections & Runtime',audit:'Audit & Governance',guide:'Help & Guide',project:this.selectedName||'Application'}
+      return titles[this.page]||'DigiOps'
+    },
+    get pageEyebrow(){
+      const labels={dashboard:'Operate',projects:'Workspace',deployments:'Operate','health-center':'Observe',targets:'Infrastructure',settings:'System',audit:'Governance',guide:'Learn',project:'Application'}
+      return labels[this.page]||'Control Plane'
+    },
+    get commandHeadline(){
+      if(this.stats.attention>0)return this.stats.attention+' application'+(this.stats.attention===1?' needs':'s need')+' attention'
+      if(this.stats.updates>0)return this.stats.updates+' deployable update'+(this.stats.updates===1?' is':'s are')+' ready'
+      if(this.stats.pending>0)return 'Fleet is stable with '+this.stats.pending+' pending verification'
+      return 'All known application states are healthy'
+    },
+    get commandSummary(){
+      if(this.stats.attention>0)return 'Review attention items first, then verify health before deployment.'
+      if(this.stats.updates>0)return 'Review exact workflow artifacts in Deployment Center before publishing.'
+      return 'DigiOps is using last-known state. Remote checks remain explicit so the control plane stays fast.'
+    },
+    get updateProjects(){return this.projects.filter(p=>p.update).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)))},
+    get healthSortedProjects(){
+      const rank={attention:0,pending:1,healthy:2}
+      return this.projects.slice().sort((a,b)=>(rank[a.health||'pending']??1)-(rank[b.health||'pending']??1)||String(a.name).localeCompare(String(b.name)))
+    },
+    get helpContent(){return HELP_TOPICS[this.helpTopic]||HELP_TOPICS[this.page]||HELP_TOPICS.dashboard},
     get attentionProjects(){
       return this.projects
         .filter(p=>p.health==='attention'||p.update)
@@ -196,6 +236,8 @@ function app(){
     get runtimeSourceShort(){return this.runtimeInfo&&this.runtimeInfo.sourceSha?String(this.runtimeInfo.sourceSha).slice(0,12):'—'},
     get runtimeSourceFull(){return this.runtimeInfo&&this.runtimeInfo.sourceSha?String(this.runtimeInfo.sourceSha):''},
     targetName(id){const t=this.targets.find(x=>x.id===id);return t?t.name:id},
+    openHelp(topic='dashboard'){this.helpTopic=HELP_TOPICS[topic]?topic:(this.page==='project'?(HELP_TOPICS[this.projectTab]?this.projectTab:'project'):this.page);this.helpOpen=true;icons()},
+    closeHelp(){this.helpOpen=false},
     async copyText(value){
       if(!value)return
       try{await navigator.clipboard.writeText(String(value));this.notice='Copied to clipboard.'}
@@ -360,6 +402,9 @@ function app(){
     routeFor(page,id='',tab='overview'){
       if(page==='dashboard')return ''
       if(page==='projects')return 'apps'
+      if(page==='deployments')return 'deployments'
+      if(page==='health-center')return 'health'
+      if(page==='guide')return 'guide'
       if(page==='targets')return 'targets'
       if(page==='audit')return 'audit'
       if(page==='settings')return 'settings'
@@ -410,6 +455,9 @@ function app(){
         if(tab==='files'&&!this.fileListing)this.browse('public','',false)
         icons();return
       }
+      if(parts[0]==='deployments'){this.page='deployments';this.selectedId=null;icons();return}
+      if(parts[0]==='health'){this.page='health-center';this.selectedId=null;icons();return}
+      if(parts[0]==='guide'){this.page='guide';this.selectedId=null;icons();return}
       if(parts[0]==='targets'&&this.userRole==='admin'){this.page='targets';this.selectedId=null;await this.loadTargets();icons();return}
       if(parts[0]==='audit'&&this.userRole==='admin'){this.page='audit';this.selectedId=null;await this.loadAudit();icons();return}
       if(parts[0]==='settings'){this.page='settings';this.selectedId=null;await Promise.allSettled([this.loadInfrastructure(),this.loadRuntimeInfo()]);icons();return}
@@ -422,6 +470,9 @@ function app(){
     },
     async openProject(id){
       await this.navigateRoute(this.routeFor('project',id,'overview'))
+    },
+    async openProjectTab(id,tab='overview'){
+      await this.navigateRoute(this.routeFor('project',id,tab))
     },
     normalizeSlug(value){
       return String(value||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')
@@ -857,18 +908,55 @@ document.querySelector('#app').innerHTML=`
   <div x-show="ready && user" class="app-frame flex">
     <div x-show="sidebarOpen" @click="sidebarOpen=false" class="fixed inset-0 z-40 bg-slate-950/20 lg:hidden"></div>
     <aside class="sidebar" :class="sidebarOpen?'open':''">
-      <div class="mb-7 flex items-center gap-3 px-2"><div class="brand-mark"><i data-lucide="zap"></i></div><div><div class="font-bold">DigiOps</div><div class="text-xs text-slate-500">Control Plane</div></div><button @click="sidebarOpen=false" class="ml-auto lg:hidden"><i data-lucide="x"></i></button></div>
-      <div class="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Workspace</div>
-      <button @click="go('dashboard')" class="side-link" :class="page==='dashboard'?'active':''"><i data-lucide="layout-dashboard"></i>Dashboard</button>
-      <button @click="go('projects')" class="side-link" :class="['projects','project'].includes(page)?'active':''"><i data-lucide="folder-git-2"></i>Applications<span class="ml-auto rounded-full bg-slate-200 px-2 text-[11px]" x-text="projects.length"></span></button>
-      <button @click="go('targets')" class="side-link" :class="page==='targets'?'active':''" x-show="userRole==='admin'"><i data-lucide="server"></i>Targets<span class="ml-auto rounded-full bg-slate-200 px-2 text-[11px]" x-text="targets.length"></span></button>
-      <button @click="go('audit')" class="side-link" :class="page==='audit'?'active':''" x-show="userRole==='admin'"><i data-lucide="file-clock"></i>Audit Log</button>
-      <button @click="go('settings')" class="side-link" :class="page==='settings'?'active':''"><i data-lucide="settings-2"></i>Connections</button>
-      <div class="mt-auto rounded-2xl border border-slate-200 bg-white p-3"><div class="flex items-center gap-3"><span class="grid h-9 w-9 place-items-center rounded-full bg-blue-50 text-blue-700"><i data-lucide="user-round" class="h-4 w-4"></i></span><div class="min-w-0 flex-1"><b class="block truncate text-sm" x-text="userName"></b><small class="block truncate text-slate-500" x-text="userRole"></small></div><button @click="logout()" class="icon-btn h-8 w-8 border-0 shadow-none" title="Logout"><i data-lucide="log-out" class="h-4 w-4"></i></button></div></div>
+      <div class="sidebar-brand">
+        <div class="brand-mark"><i data-lucide="zap"></i></div>
+        <div class="min-w-0"><div class="font-bold text-white">DigiOps</div><div class="text-xs text-slate-400">Deployment Control Plane</div></div>
+        <button @click="sidebarOpen=false" class="ml-auto text-slate-400 hover:text-white lg:hidden"><i data-lucide="x"></i></button>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="sidebar-section">
+          <div class="sidebar-label">Operate</div>
+          <button @click="go('dashboard')" class="side-link" :class="page==='dashboard'?'active':''"><i data-lucide="layout-dashboard"></i><span>Command Center</span></button>
+          <button @click="go('projects')" class="side-link" :class="['projects','project'].includes(page)?'active':''"><i data-lucide="folder-git-2"></i><span>Applications</span><span class="nav-badge" x-text="projects.length"></span></button>
+          <button @click="go('deployments')" class="side-link" :class="page==='deployments'?'active':''"><i data-lucide="rocket"></i><span>Deployment Center</span><span x-show="stats.updates" class="nav-badge nav-badge-warn" x-text="stats.updates"></span></button>
+          <button @click="go('health-center')" class="side-link" :class="page==='health-center'?'active':''"><i data-lucide="heart-pulse"></i><span>Health & Readiness</span><span x-show="stats.attention" class="nav-badge nav-badge-danger" x-text="stats.attention"></span></button>
+        </div>
+
+        <div class="sidebar-section" x-show="userRole==='admin'">
+          <div class="sidebar-label">Infrastructure</div>
+          <button @click="go('targets')" class="side-link" :class="page==='targets'?'active':''"><i data-lucide="server"></i><span>Deployment Targets</span><span class="nav-badge" x-text="targets.length"></span></button>
+          <button @click="go('settings')" class="side-link" :class="page==='settings'?'active':''"><i data-lucide="settings-2"></i><span>Connections & Runtime</span></button>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-label">Control</div>
+          <button @click="go('audit')" class="side-link" :class="page==='audit'?'active':''" x-show="userRole==='admin'"><i data-lucide="file-clock"></i><span>Audit & Governance</span></button>
+          <button @click="go('guide')" class="side-link" :class="page==='guide'?'active':''"><i data-lucide="book-open"></i><span>Help & Guide</span></button>
+        </div>
+      </nav>
+
+      <div class="sidebar-build">
+        <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold text-slate-300">Running build</span><span x-show="runtimeInfo&&runtimeInfo.identityVerified" class="status-dot bg-emerald-400"></span></div>
+        <div class="mt-2 flex items-center justify-between gap-3 text-xs"><span class="text-slate-400">DigiOps</span><b class="text-slate-100" x-text="'v'+runtimeVersion"></b></div>
+        <div class="mt-1 flex items-center justify-between gap-3 text-xs"><span class="text-slate-400">Source</span><code class="text-slate-300" x-text="runtimeSourceShort"></code></div>
+      </div>
+
+      <div class="sidebar-user"><span class="grid h-9 w-9 place-items-center rounded-xl bg-white/10 text-slate-200"><i data-lucide="user-round" class="h-4 w-4"></i></span><div class="min-w-0 flex-1"><b class="block truncate text-sm text-white" x-text="userName"></b><small class="block truncate text-slate-400" x-text="userRole"></small></div><button @click="logout()" class="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-white/10 hover:text-white" title="Logout"><i data-lucide="log-out" class="h-4 w-4"></i></button></div>
     </aside>
 
     <main class="min-w-0 flex-1">
-      <header class="topbar"><div class="flex min-w-0 flex-1 items-center gap-3"><button @click="sidebarOpen=true" class="icon-btn lg:hidden"><i data-lucide="menu"></i></button><label class="search-field"><i data-lucide="search" class="h-4 w-4 text-slate-400"></i><input x-model="query" placeholder="Search applications, repositories, paths…"></label></div><span class="ml-3 hidden items-center gap-2 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 sm:inline-flex"><span class="h-2 w-2 rounded-full bg-emerald-500"></span>Secure session</span></header>
+      <header class="topbar">
+        <div class="flex min-w-0 items-center gap-3">
+          <button @click="sidebarOpen=true" class="icon-btn lg:hidden"><i data-lucide="menu"></i></button>
+          <div class="min-w-0"><div class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400" x-text="pageEyebrow"></div><div class="truncate text-sm font-bold text-slate-900" x-text="pageTitle"></div></div>
+        </div>
+        <div class="ml-auto flex min-w-0 items-center gap-2">
+          <label class="search-field hidden md:flex"><i data-lucide="search" class="h-4 w-4 text-slate-400"></i><input x-model="query" @keydown.enter="go('projects')" placeholder="Find an application…"></label>
+          <button @click="openHelp()" class="icon-btn" title="Explain this page"><i data-lucide="circle-help" class="h-4 w-4"></i></button>
+          <span class="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 xl:inline-flex"><span class="status-dot" :class="runtimeInfo&&runtimeInfo.identityVerified?'bg-emerald-500':'bg-amber-500'"></span><span x-text="runtimeInfo&&runtimeInfo.identityVerified?'Verified build':'Build check needed'"></span></span>
+        </div>
+      </header>
 
       <div class="px-4 py-6 md:px-7">
         <div x-show="notice" class="mb-4 rounded-xl px-4 py-3 text-sm font-medium" :class="noticeTone" x-text="notice"></div>
@@ -886,6 +974,24 @@ document.querySelector('#app').innerHTML=`
         </div>
 
         <section x-show="page==='dashboard'" class="space-y-6">
+          <div class="command-hero">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-blue-200"><i data-lucide="circle-gauge" class="h-4 w-4"></i>Command Center</div>
+              <h1 class="mt-3 text-2xl font-bold text-white md:text-3xl" x-text="commandHeadline"></h1>
+              <p class="mt-2 max-w-3xl text-sm leading-6 text-slate-300" x-text="commandSummary"></p>
+            </div>
+            <div class="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4">
+              <button @click="go('projects')" class="hero-metric"><span>Apps</span><b x-text="stats.total"></b></button>
+              <button @click="go('deployments')" class="hero-metric"><span>Updates</span><b x-text="stats.updates"></b></button>
+              <button @click="go('health-center')" class="hero-metric"><span>Attention</span><b x-text="stats.attention"></b></button>
+              <button @click="go('targets')" class="hero-metric" x-show="userRole==='admin'"><span>Targets</span><b x-text="stats.targets"></b></button>
+            </div>
+          </div>
+          <div class="quick-actions">
+            <button @click="openCreate()" class="quick-action"><span class="quick-icon"><i data-lucide="plus"></i></span><span><b>Add application</b><small>Register a repository and deployment path.</small></span></button>
+            <button @click="go('deployments')" class="quick-action"><span class="quick-icon"><i data-lucide="rocket"></i></span><span><b>Review deployments</b><small>See recent releases and deployable updates.</small></span></button>
+            <button @click="go('health-center')" class="quick-action"><span class="quick-icon"><i data-lucide="heart-pulse"></i></span><span><b>Check readiness</b><small>Review last-known application and target state.</small></span></button>
+          </div>
           <div class="flex flex-wrap items-end justify-between gap-4">
             <div><p class="text-sm font-medium text-blue-600">Fleet operations</p><h1 class="mt-1 text-2xl font-bold">Operations Dashboard</h1><p class="muted mt-1">Last-known fleet state across applications and deployment targets. No remote checks run just by opening this page.</p></div>
             <div class="flex flex-wrap gap-2"><button @click="go('targets')" class="btn" x-show="userRole==='admin'"><i data-lucide="server" class="h-4 w-4"></i>Targets</button><button @click="openCreate()" class="btn btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>Add application</button></div>
@@ -1151,6 +1257,12 @@ document.querySelector('#app').innerHTML=`
       </footer>
     </main>
   </div>
+
+  <div x-show="helpOpen" @click="closeHelp()" class="help-backdrop"></div>
+  <aside x-show="helpOpen" class="help-drawer">
+    <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5"><div><p class="eyebrow">Context help</p><h2 class="mt-1 text-xl font-bold" x-text="helpContent.title"></h2></div><button @click="closeHelp()" class="icon-btn"><i data-lucide="x"></i></button></div>
+    <div class="p-6"><p class="text-sm leading-6 text-slate-600" x-text="helpContent.intro"></p><div class="mt-5 space-y-3"><template x-for="item in helpContent.items" :key="item"><div class="flex items-start gap-3 rounded-2xl bg-slate-50 p-3 text-sm text-slate-700"><span class="mt-1 h-2 w-2 shrink-0 rounded-full bg-blue-500"></span><span x-text="item"></span></div></template></div><button @click="closeHelp();go('guide')" class="btn mt-6 w-full"><i data-lucide="book-open" class="h-4 w-4"></i>Open full Help & Guide</button></div>
+  </aside>
 
   <div x-show="modal==='target'" class="modal-backdrop"><div class="modal" @click.outside="modal=null"><div class="flex items-center justify-between border-b border-slate-200 px-6 py-5"><div><h2 class="text-lg font-bold">Add deployment target</h2><p class="muted">Connect another Cloudways application or server through the signed DigiOps agent.</p></div><button @click="modal=null" class="icon-btn"><i data-lucide="x"></i></button></div><form @submit.prevent="saveTarget()" class="space-y-4 p-6"><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Target name</span><input x-model="targetForm.name" @input="syncTargetId()" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Target ID</span><input x-model="targetForm.id" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label></div><label class="block text-sm"><span class="mb-1.5 block font-semibold">Agent HTTPS endpoint</span><input x-model="targetForm.endpoint" placeholder="https://remote.example.com/digiops-agent.php" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="block text-sm"><span class="mb-1.5 block font-semibold">Shared secret</span><div class="flex gap-2"><input x-model="targetForm.secret" class="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2.5 font-mono text-xs" minlength="32" required><button type="button" @click="generateTargetSecret()" class="btn">Generate</button></div><small class="text-slate-500">Store the same secret as DIGIOPS_AGENT_SECRET on the remote application.</small></label><div class="flex justify-end gap-2"><button type="button" @click="modal=null" class="btn">Cancel</button><button class="btn btn-primary" :disabled="busy">Save target</button></div></form></div></div>
 
