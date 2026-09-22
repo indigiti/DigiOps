@@ -93,7 +93,7 @@ final class Files
         if (!is_dir($source)) throw new RuntimeException('SOURCE_DIRECTORY_MISSING');
         self::ensureDir($target);
         $it = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($source, \FilesystemIterator::SKIP_DOTS),
+            new \RecursiveDirectoryIterator($source, \FilesystemIterator::SKIP_DOTS | \FilesystemIterator::CURRENT_AS_FILEINFO | \FilesystemIterator::KEY_AS_PATHNAME),
             \RecursiveIteratorIterator::SELF_FIRST
         );
         foreach ($it as $item) {
@@ -134,7 +134,7 @@ final class Files
         $newFiles=[];
         $newDirs=[];
         $it = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($source, \FilesystemIterator::SKIP_DOTS),
+            new \RecursiveDirectoryIterator($source, \FilesystemIterator::SKIP_DOTS | \FilesystemIterator::CURRENT_AS_FILEINFO | \FilesystemIterator::KEY_AS_PATHNAME),
             \RecursiveIteratorIterator::SELF_FIRST
         );
         foreach ($it as $item) {

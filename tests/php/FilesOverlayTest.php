@@ -23,6 +23,9 @@ Files::ensureDir($source.'/app');
 Files::ensureDir($target.'/app');
 file_put_contents($source.'/app/existing.php','new');
 file_put_contents($source.'/app/new.php','new-file');
+file_put_contents($source.'/.htaccess','rewrite');
+Files::ensureDir($source.'/.runtime-web/php-app/public');
+file_put_contents($source.'/.runtime-web/php-app/public/router.php','router');
 file_put_contents($target.'/app/existing.php','old');
 file_put_contents($target.'/runtime.json','state');
 
@@ -31,6 +34,8 @@ Files::applyOverlay($plan);
 if(file_get_contents($target.'/app/existing.php')!=='new') throw new RuntimeException('OVERLAY_UPDATE_FAILED');
 if(file_get_contents($target.'/app/new.php')!=='new-file') throw new RuntimeException('OVERLAY_CREATE_FAILED');
 if(file_get_contents($target.'/runtime.json')!=='state') throw new RuntimeException('OVERLAY_RUNTIME_STATE_CHANGED');
+if(file_get_contents($target.'/.htaccess')!=='rewrite') throw new RuntimeException('OVERLAY_DOTFILE_MISSING');
+if(file_get_contents($target.'/.runtime-web/php-app/public/router.php')!=='router') throw new RuntimeException('OVERLAY_DOTDIR_MISSING');
 
 Files::rollbackOverlay($plan);
 if(file_get_contents($target.'/app/existing.php')!=='old') throw new RuntimeException('OVERLAY_RESTORE_FAILED');
