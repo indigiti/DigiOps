@@ -1,30 +1,33 @@
 # DigiOps UI / UX Baseline
 
-The admin shell is based on the supplied reference screenshots:
+DigiOps uses a calm operations-console model: strong hierarchy, low visual noise, explicit state, and contextual guidance instead of dense dashboards.
 
-- quiet light-gray sidebar
-- white primary workspace
-- compact top search bar
-- rounded cards with fine borders instead of heavy shadows
+## Shell
+
+- dark control-plane sidebar separates navigation from the working surface
+- white/light operational workspace
+- compact top bar with page context, application search, contextual help, and build identity
+- rounded cards with fine borders and restrained shadows
 - blue primary actions
-- card/list project presentation
-- project detail header with status, branch, progress/actions
-- tabbed project workspace
-- large readable settings/content panels
-- restrained modal treatment
-
-The visual baseline is intentionally operational rather than decorative. Future modules should reuse this shell instead of introducing unrelated layouts.
+- status colors are reserved for meaningful operational state
+- network-expensive checks remain explicit; overview pages use last-known local state
+- responsive mobile sidebar and stacked operational cards
 
 ## Primary navigation
 
-- Dashboard
+### Operate
+- Command Center
 - Applications
-- Deployments
-- Releases
-- Health
-- Connections
-- Audit Log
-- Settings
+- Deployment Center
+- Health & Readiness
+
+### Infrastructure
+- Deployment Targets
+- Connections & Runtime
+
+### Control
+- Audit & Governance
+- Help & Guide
 
 ## Application tabs
 
@@ -34,3 +37,22 @@ The visual baseline is intentionally operational rather than decorative. Future 
 - Files
 - Health
 - Settings
+
+## Contextual help
+
+Every major area can open a right-side help drawer explaining:
+
+- what the page represents
+- whether data is live or last-known
+- safe next actions
+- deployment and rollback semantics
+- health-state meaning
+- target/agent capability requirements
+
+The full Help & Guide page acts as the operating map for new and occasional users.
+
+## Design rule
+
+DigiOps should expose complexity progressively. The first view answers **what needs attention and what can I do next**. Exact workflow IDs, artifact IDs, commit SHAs, paths, runtime identity, and diagnostic detail remain available one level deeper.
+
+Future modules should reuse this shell and navigation model instead of introducing unrelated layouts.
