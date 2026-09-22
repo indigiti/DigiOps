@@ -13,6 +13,7 @@ const HELP_TOPICS={
   dashboard:{title:'Command Center',intro:'A last-known operational summary. Opening this page does not fan out to GitHub or remote targets.',items:['Attention shows applications that need review.','Updates are known deployable builds detected during an explicit update check.','Pending means health has not been verified yet.','Use Deployment Center for release activity and Health & Readiness for fleet condition.']},
   projects:{title:'Applications',intro:'Each application maps one repository to isolated public/private deployment paths.',items:['Open an application to inspect its source, deployment, releases, files and health.','Search works across application name, repository, URL and branch.','Application cards show last-known state only; expensive remote checks stay on demand.']},
   deployments:{title:'Deployment Center',intro:'A fleet-level view of recent releases and applications with known deployable updates.',items:['Review a candidate before deployment.','DigiOps snapshots the current public release before publishing.','If a browser response is interrupted, the authoritative server-side deployment state is followed instead of starting a duplicate deployment.']},
+  verification:{title:'Verification Center',intro:'Durable step-by-step evidence for every deployment attempt, loaded from DigiOps local state without GitHub fan-out.',items:['Each checkpoint records its phase, status, timestamp and evidence source.','Failures stay attached to the exact checkpoint that failed.','Request ID, workflow run, artifact, commit and target are shown together for traceability.','Health verification is the final checkpoint after authoritative deployment confirmation.']},
   health:{title:'Health & Readiness',intro:'Fleet health is deliberately last-known until you explicitly check an application.',items:['Healthy means the most recent probe passed.','Attention means the most recent probe needs review.','Pending means no recent authoritative health result is stored.','Open an application health tab to run a fresh probe.']},
   targets:{title:'Deployment Targets',intro:'Targets are local or remote execution nodes used by registered applications.',items:['Remote targets use a signed DigiOps agent.','Test a target before assigning important applications.','Agent version and capabilities determine whether safe deployment confirmation is available.']},
   settings:{title:'Connections & Runtime',intro:'External connections and infrastructure policies live here.',items:['GitHub access is used only for explicit repository/workflow actions.','Redis credentials are encrypted in private storage.','DigiOps should bypass Varnish because it is an authenticated control plane.','Runtime identity confirms the exact build running on the server.']},
@@ -62,7 +63,7 @@ function app(){
     projects:[], targets:[], selectedId:null, releases:[], githubInfo:null, fileListing:null, health:null, audit:[],
     detailCache:{github:{},releases:{},health:{},files:{}}, requestPool:{},
     modal:null, busy:false, notice:'', error:'', operationTimer:null,
-    deploymentWatches:[], deploymentJobs:[], deploymentWatchTimer:null, deploymentWatchBusy:false,
+    deploymentWatches:[], deploymentJobs:[], verificationJobId:null, deploymentWatchTimer:null, deploymentWatchBusy:false,
     operation:{active:false,type:'',title:'',message:'',percent:0,status:'idle',estimated:false},
     login:{username:'',password:'',totp:''},
     install:{name:'Administrator',username:'admin',password:'',confirm:'',totpSecret:''},
@@ -171,11 +172,11 @@ function app(){
       }
     },
     get pageTitle(){
-      const titles={dashboard:'Command Center',projects:'Applications',deployments:'Deployment Center','health-center':'Health & Readiness',targets:'Deployment Targets',settings:'Connections & Runtime',audit:'Audit & Governance',guide:'Help & Guide',project:this.selectedName||'Application'}
+      const titles={dashboard:'Command Center',projects:'Applications',deployments:'Deployment Center',verification:'Verification Center','health-center':'Health & Readiness',targets:'Deployment Targets',settings:'Connections & Runtime',audit:'Audit & Governance',guide:'Help & Guide',project:this.selectedName||'Application'}
       return titles[this.page]||'DigiOps'
     },
     get pageEyebrow(){
-      const labels={dashboard:'Operate',projects:'Workspace',deployments:'Operate','health-center':'Observe',targets:'Infrastructure',settings:'System',audit:'Governance',guide:'Learn',project:'Application'}
+      const labels={dashboard:'Operate',projects:'Workspace',deployments:'Operate',verification:'Observe','health-center':'Observe',targets:'Infrastructure',settings:'System',audit:'Governance',guide:'Learn',project:'Application'}
       return labels[this.page]||'Control Plane'
     },
     get commandHeadline(){
@@ -214,6 +215,33 @@ function app(){
       }).sort((a,b)=>b.apps-a.apps)
     },
     get recentDeploymentJobs(){return this.deploymentJobs.slice(0,12)},
+    get verificationJobs(){return this.deploymentJobs.slice(0,30)},
+    get selectedVerificationJob(){
+      if(!this.verificationJobs.length)return null
+      return this.verificationJobs.find(j=>j.requestId===this.verificationJobId)||this.verificationJobs[0]
+    },
+    get verificationStats(){
+      const jobs=this.verificationJobs
+      return {
+        total:jobs.length,
+        active:jobs.filter(j=>['queued','pending','running','unavailable','verifying'].includes(String(j.state||''))).length,
+        verified:jobs.filter(j=>(j.health&&j.health.ok===true)||j.phase==='health-verified').length,
+        attention:jobs.filter(j=>j.phase==='health-attention'||j.state==='attention'||j.state==='unavailable').length,
+        failed:jobs.filter(j=>j.state==='failed').length,
+        completed:jobs.filter(j=>j.state==='deployed').length
+      }
+    },
+    get latestVerificationJob(){return this.verificationJobs.length?this.verificationJobs[0]:null},
+    get latestVerificationSummary(){
+      const j=this.latestVerificationJob
+      if(!j)return 'No deployment verification recorded yet.'
+      const name=j.projectName||j.project
+      if(j.state==='failed')return name+' failed at '+this.deploymentJobPhase(j)+' · '+(j.error||'DEPLOY_FAILED')
+      if(j.phase==='health-attention')return name+' deployed but health needs attention.'
+      if((j.health&&j.health.ok===true)||j.phase==='health-verified')return name+' deployment and health are verified.'
+      if(['queued','pending','running','unavailable','verifying'].includes(String(j.state||'')))return name+' verification is active at '+this.deploymentJobPhase(j)+'.'
+      return name+' · '+String(j.state||'unknown')+' · '+this.deploymentJobPhase(j)
+    },
     get recentDeployments(){
       return this.projects
         .filter(p=>p.lastDeploy&&p.lastDeploy!=='Never')
@@ -233,6 +261,14 @@ function app(){
     get activeDeploymentWatches(){return this.deploymentWatches.filter(w=>['queued','pending','running','unavailable'].includes(w.status))},
     get selectedDeploymentWatch(){return this.selected?this.activeDeploymentWatches.find(w=>w.projectId===this.selected.id)||null:null},
     get backgroundDeploymentCount(){return this.activeDeploymentWatches.length},
+    get latestWorkflow(){
+      return this.githubInfo&&Array.isArray(this.githubInfo.runs)&&this.githubInfo.runs.length?this.githubInfo.runs[0]:null
+    },
+    get latestWorkflowNumber(){return this.latestWorkflow&&this.latestWorkflow.number?'#'+this.latestWorkflow.number:'—'},
+    get latestWorkflowCommitShort(){return this.latestWorkflow&&this.latestWorkflow.sha?String(this.latestWorkflow.sha).slice(0,12):'—'},
+    get latestWorkflowTime(){return this.latestWorkflow&&this.latestWorkflow.updatedAt?this.formatDate(this.latestWorkflow.updatedAt):'—'},
+    get sourceCommitsAhead(){return this.candidate&&Number.isInteger(this.candidate.sourceCommitsAhead)?this.candidate.sourceCommitsAhead:'—'},
+    get deployableCommitsAhead(){return this.candidate&&Number.isInteger(this.candidate.deployableCommitsAhead)?this.candidate.deployableCommitsAhead:'—'},
     get userName(){return this.user && this.user.name ? this.user.name : ''},
     get userRole(){return this.user && this.user.role ? this.user.role : ''},
     get selectedName(){return this.selected ? this.selected.name : ''},
@@ -335,6 +371,42 @@ function app(){
       if(!job)return '—'
       const run=job.runNumber?('#'+job.runNumber):(job.runId?('run '+job.runId):'build')
       return run+' · artifact '+(job.artifactId||'—')
+    },
+    deploymentJobCommit(job){return job&&job.commit?String(job.commit).slice(0,12):'—'},
+    verificationSteps(job){
+      if(!job)return []
+      const rows=Array.isArray(job.verification)?job.verification.filter(v=>v&&typeof v==='object'):[]
+      if(rows.length)return rows.map((v,index)=>({...v,key:(v.phase||'step')+'-'+index}))
+      const phase=String(job.phase||job.state||'unknown')
+      const status=job.state==='failed'?'failed':job.phase==='health-attention'?'attention':job.state==='unavailable'?'unavailable':job.state==='deployed'?'passed':['queued','pending'].includes(job.state)?'waiting':'running'
+      return [{key:'legacy-0',phase,label:phase.replace(/[-_]+/g,' '),status,source:job.verificationSource||'legacy-job',error:job.error||'',startedAt:job.startedAt||job.createdAt||'',updatedAt:job.updatedAt||'',completedAt:job.completedAt||null}]
+    },
+    verificationStepLabel(step){
+      return step&&step.label?step.label:String(step&&step.phase||'step').replace(/[-_]+/g,' ')
+    },
+    verificationTone(status){
+      if(status==='failed')return 'border-rose-200 bg-rose-50 text-rose-700'
+      if(status==='attention'||status==='unavailable')return 'border-amber-200 bg-amber-50 text-amber-800'
+      if(status==='passed')return 'border-emerald-200 bg-emerald-50 text-emerald-700'
+      if(status==='running')return 'border-blue-200 bg-blue-50 text-blue-700'
+      return 'border-slate-200 bg-slate-50 text-slate-600'
+    },
+    verificationErrorHint(job){
+      const code=String(job&&job.error||'')
+      if(!code)return ''
+      if(/DIGEST_MISMATCH/.test(code))return 'The downloaded artifact does not match the expected SHA-256 digest.'
+      if(/ZIP|ENTRYPOINT|PAYLOAD|SYMLINK|TRAVERSAL/.test(code))return 'The release package failed structural or payload validation.'
+      if(/TARGET_AGENT_UPGRADE_REQUIRED/.test(code))return 'The remote DigiOps agent is missing a required deployment capability.'
+      if(/TARGET_CONNECT|CURLE_|TIMEOUT|HTTP_50|INVALID_RESPONSE|NetworkError|Failed to fetch/i.test(code))return 'DigiOps could not obtain authoritative target confirmation. The target may still be completing the deployment.'
+      if(/PREFLIGHT/.test(code))return 'A preflight requirement failed before publication.'
+      if(/HEALTH_CHECK_FAILED/.test(code))return 'Deployment completed, but the post-deploy health probe did not pass.'
+      if(/DEPLOYMENT_LOCKED/.test(code))return 'Another deployment or rollback already owns this application deployment lock.'
+      return 'The exact server error is shown below. Use the checkpoint and evidence source to isolate the failing component.'
+    },
+    selectVerificationJob(requestId){this.verificationJobId=requestId;icons()},
+    async openVerificationJob(requestId){
+      this.verificationJobId=requestId
+      await this.navigateRoute(this.routeFor('verification'))
     },
     healthFreshness(p){
       if(!p||!p.healthCheckedAt)return 'Not verified'
@@ -551,6 +623,7 @@ function app(){
       if(page==='dashboard')return ''
       if(page==='projects')return 'apps'
       if(page==='deployments')return 'deployments'
+      if(page==='verification')return 'verification'
       if(page==='health-center')return 'health'
       if(page==='guide')return 'guide'
       if(page==='targets')return 'targets'
@@ -604,6 +677,7 @@ function app(){
         icons();return
       }
       if(parts[0]==='deployments'){this.page='deployments';this.selectedId=null;await this.syncDeploymentWatches();icons();return}
+      if(parts[0]==='verification'){this.page='verification';this.selectedId=null;await this.syncDeploymentWatches();if(!this.verificationJobId&&this.deploymentJobs.length)this.verificationJobId=this.deploymentJobs[0].requestId;icons();return}
       if(parts[0]==='health'){this.page='health-center';this.selectedId=null;icons();return}
       if(parts[0]==='guide'){this.page='guide';this.selectedId=null;icons();return}
       if(parts[0]==='targets'&&this.userRole==='admin'){this.page='targets';this.selectedId=null;await this.loadTargets();icons();return}
@@ -1030,6 +1104,7 @@ document.querySelector('#app').innerHTML=`
           <button @click="go('dashboard')" class="side-link" :class="page==='dashboard'?'active':''"><i data-lucide="layout-dashboard"></i><span>Command Center</span></button>
           <button @click="go('projects')" class="side-link" :class="['projects','project'].includes(page)?'active':''"><i data-lucide="folder-git-2"></i><span>Applications</span><span class="nav-badge" x-text="projects.length"></span></button>
           <button @click="go('deployments')" class="side-link" :class="page==='deployments'?'active':''"><i data-lucide="rocket"></i><span>Deployment Center</span><span x-show="stats.updates" class="nav-badge nav-badge-warn" x-text="stats.updates"></span></button>
+          <button @click="go('verification')" class="side-link" :class="page==='verification'?'active':''"><i data-lucide="shield-check"></i><span>Verification</span><span x-show="verificationStats.active||verificationStats.failed" class="nav-badge" :class="verificationStats.failed?'nav-badge-danger':'nav-badge-warn'" x-text="verificationStats.failed||verificationStats.active"></span></button>
           <button @click="go('health-center')" class="side-link" :class="page==='health-center'?'active':''"><i data-lucide="heart-pulse"></i><span>Health & Readiness</span><span x-show="stats.attention" class="nav-badge nav-badge-danger" x-text="stats.attention"></span></button>
         </div>
 
@@ -1063,7 +1138,7 @@ document.querySelector('#app').innerHTML=`
         </div>
         <div class="ml-auto flex min-w-0 items-center gap-2">
           <label class="search-field hidden md:flex"><i data-lucide="search" class="h-4 w-4 text-slate-400"></i><input x-model="query" @keydown.enter="go('projects')" placeholder="Find an application…"></label>
-          <button x-show="backgroundDeploymentCount" @click="go('deployments')" class="hidden items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 sm:inline-flex"><i data-lucide="refresh-cw" class="h-3.5 w-3.5 animate-spin"></i><span x-text="backgroundDeploymentCount+' verifying'"></span></button>
+          <button x-show="backgroundDeploymentCount" @click="go('verification')" class="hidden items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 sm:inline-flex"><i data-lucide="refresh-cw" class="h-3.5 w-3.5 animate-spin"></i><span x-text="backgroundDeploymentCount+' verifying'"></span></button>
           <button @click="openHelp()" class="icon-btn" title="Explain this page"><i data-lucide="circle-help" class="h-4 w-4"></i></button>
           <span class="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 xl:inline-flex"><span class="status-dot" :class="runtimeInfo&&runtimeInfo.identityVerified?'bg-emerald-500':'bg-amber-500'"></span><span x-text="runtimeInfo&&runtimeInfo.identityVerified?'Verified build':'Build check needed'"></span></span>
         </div>
@@ -1077,7 +1152,7 @@ document.querySelector('#app').innerHTML=`
             <div class="deployment-watch-card">
               <span class="deployment-watch-icon"><i data-lucide="refresh-cw" class="h-4 w-4 animate-spin"></i></span>
               <div class="min-w-0 flex-1"><div class="flex flex-wrap items-center justify-between gap-2"><b class="truncate text-sm" x-text="w.projectName||w.projectId"></b><span class="text-xs font-semibold text-blue-700">Background verification</span></div><p class="mt-1 text-xs text-slate-500" x-text="deploymentWatchLabel(w)"></p></div>
-              <button @click="openProjectTab(w.projectId,'deploy')" class="btn py-1.5 text-xs">Open</button>
+              <button @click="openVerificationJob(w.requestId)" class="btn py-1.5 text-xs">Open</button>
             </div>
           </template>
         </div>
@@ -1100,9 +1175,11 @@ document.querySelector('#app').innerHTML=`
               <h1 class="mt-3 text-2xl font-bold text-white md:text-3xl" x-text="commandHeadline"></h1>
               <p class="mt-2 max-w-3xl text-sm leading-6 text-slate-300" x-text="commandSummary"></p>
             </div>
-            <div class="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4">
+            <div class="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-3">
               <button @click="go('projects')" class="hero-metric"><span>Apps</span><b x-text="stats.total"></b></button>
               <button @click="go('deployments')" class="hero-metric"><span>Updates</span><b x-text="stats.updates"></b></button>
+              <button @click="go('verification')" class="hero-metric"><span>Verifying</span><b x-text="verificationStats.active"></b></button>
+              <button @click="go('verification')" class="hero-metric"><span>Failed</span><b x-text="verificationStats.failed"></b></button>
               <button @click="go('health-center')" class="hero-metric"><span>Attention</span><b x-text="stats.attention"></b></button>
               <button @click="go('targets')" class="hero-metric" x-show="userRole==='admin'"><span>Targets</span><b x-text="stats.targets"></b></button>
             </div>
@@ -1110,13 +1187,15 @@ document.querySelector('#app').innerHTML=`
           <div class="quick-actions">
             <button @click="openCreate()" class="quick-action"><span class="quick-icon"><i data-lucide="plus"></i></span><span><b>Add application</b><small>Register a repository and deployment path.</small></span></button>
             <button @click="go('deployments')" class="quick-action"><span class="quick-icon"><i data-lucide="rocket"></i></span><span><b>Review deployments</b><small>See recent releases and deployable updates.</small></span></button>
+            <button @click="go('verification')" class="quick-action"><span class="quick-icon"><i data-lucide="shield-check"></i></span><span><b>Inspect verification</b><small>See each deployment checkpoint and exact failures.</small></span></button>
             <button @click="go('health-center')" class="quick-action"><span class="quick-icon"><i data-lucide="heart-pulse"></i></span><span><b>Check readiness</b><small>Review last-known application and target state.</small></span></button>
           </div>
           <div class="fleet-strip">
             <button @click="go('projects')" class="fleet-chip"><span>Applications</span><b x-text="stats.total"></b></button>
-            <button @click="go('deployments')" class="fleet-chip"><span>Active deploys</span><b x-text="backgroundDeploymentCount"></b></button>
-            <button @click="filter='healthy';go('projects')" class="fleet-chip"><span>Healthy</span><b class="text-emerald-700" x-text="stats.healthy"></b></button>
-            <button @click="filter='attention';go('projects')" class="fleet-chip"><span>Attention</span><b class="text-rose-700" x-text="stats.attention"></b></button>
+            <button @click="go('verification')" class="fleet-chip"><span>Verifying</span><b class="text-blue-700" x-text="verificationStats.active"></b></button>
+            <button @click="go('verification')" class="fleet-chip"><span>Health verified</span><b class="text-emerald-700" x-text="verificationStats.verified"></b></button>
+            <button @click="go('verification')" class="fleet-chip"><span>Deploy failed</span><b class="text-rose-700" x-text="verificationStats.failed"></b></button>
+            <button @click="go('health-center')" class="fleet-chip"><span>Health pending</span><b class="text-amber-700" x-text="stats.pending"></b></button>
             <button @click="filter='updates';go('projects')" class="fleet-chip"><span>Updates</span><b class="text-amber-700" x-text="stats.updates"></b></button>
           </div>
 
@@ -1134,9 +1213,9 @@ document.querySelector('#app').innerHTML=`
           </div>
 
           <div class="panel">
-            <div class="mb-4 flex items-start justify-between gap-3"><div><h2 class="font-bold">Deployment activity</h2><p class="muted mt-1">Server-owned deployment history. This survives browser reloads and device changes.</p></div><button @click="go('deployments')" class="btn">Deployment Center</button></div>
+            <div class="mb-4 flex items-start justify-between gap-3"><div><h2 class="font-bold">Verification activity</h2><p class="muted mt-1" x-text="latestVerificationSummary"></p></div><button @click="go('verification')" class="btn">Verification Center</button></div>
             <div x-show="recentDeploymentJobs.length===0" class="empty-state">No deployment jobs recorded yet.</div>
-            <template x-for="j in recentDeploymentJobs.slice(0,6)" :key="j.requestId"><button @click="openProjectTab(j.project,'deploy')" class="row w-full text-left"><span class="min-w-0"><b class="block truncate" x-text="j.projectName||j.project"></b><small class="block truncate text-slate-500"><span x-text="deploymentJobIdentity(j)"></span> · <span class="capitalize" x-text="deploymentJobPhase(j)"></span></small></span><span class="text-right"><span class="pill capitalize" x-text="j.state"></span><small class="mt-1 block text-slate-400" x-text="formatDate(j.updatedAt)"></small></span></button></template>
+            <template x-for="j in recentDeploymentJobs.slice(0,6)" :key="j.requestId"><button @click="openVerificationJob(j.requestId)" class="row w-full text-left"><span class="min-w-0"><b class="block truncate" x-text="j.projectName||j.project"></b><small class="block truncate text-slate-500"><span x-text="deploymentJobIdentity(j)"></span> · commit <code x-text="deploymentJobCommit(j)"></code> · <span class="capitalize" x-text="deploymentJobPhase(j)"></span></small><small x-show="j.error" class="mt-1 block truncate font-mono text-rose-600" x-text="j.error"></small></span><span class="text-right"><span class="pill capitalize" :class="verificationTone(j.state==='failed'?'failed':j.phase==='health-attention'?'attention':j.state==='deployed'?'passed':j.state==='unavailable'?'unavailable':'running')" x-text="j.state"></span><small class="mt-1 block text-slate-400" x-text="formatDate(j.updatedAt)"></small></span></button></template>
           </div>
         </section>
 
@@ -1151,7 +1230,29 @@ document.querySelector('#app').innerHTML=`
           <div class="mb-5 flex gap-6 overflow-x-auto border-b border-slate-200"><template x-for="t in ['overview','deploy','releases','files','health','settings']"><button @click="setTab(t)" class="tab capitalize" :class="projectTab===t?'active':''" x-text="t"></button></template></div>
           <div x-show="projectTab==='overview'" class="grid gap-5 xl:grid-cols-[1.4fr_.8fr]">
             <div class="panel"><h2 class="font-bold">Deployment configuration</h2><div class="row"><span><b class="block text-sm">Public URL</b><small class="text-slate-500">Browser route</small></span><code x-text="selectedUrl"></code></div><div class="row"><span><b class="block text-sm">Public folder</b><small class="text-slate-500">Release payload only</small></span><code class="text-xs" x-text="selectedPublicPath"></code></div><div class="row"><span><b class="block text-sm">Private folder</b><small class="text-slate-500">Runtime and metadata</small></span><code class="text-xs" x-text="selectedPrivatePath"></code></div><div class="row"><span><b class="block text-sm">Current commit</b></span><code x-text="selectedCommit"></code></div></div>
-            <div class="space-y-5"><div class="panel"><h2 class="font-bold">GitHub</h2><p class="muted mt-1" x-show="!githubInfo">Not checked yet. DigiOps does not query GitHub just by opening this application.</p><div x-show="githubConnected"><div class="mt-4 flex items-center gap-2 text-sm"><i data-lucide="check-circle-2" class="h-4 w-4 text-emerald-600"></i>Connected</div><div class="mt-4 text-sm"><span class="text-slate-500">Latest workflow</span><b class="mt-1 block" x-text="latestWorkflowStatus"></b></div></div><p x-show="githubError" class="mt-3 text-sm text-rose-600" x-text="githubErrorMessage"></p></div><div class="panel"><h2 class="font-bold">Update</h2><p class="muted mt-2" x-text="updateMessage"></p><div class="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">Performance mode: GitHub, health, releases and files are loaded on demand and cached per application for this session.</div></div></div>
+            <div class="space-y-5">
+              <div class="panel">
+                <div class="flex items-start justify-between gap-3"><div><h2 class="font-bold">Latest workflow</h2><p class="muted mt-1" x-show="!githubInfo">Not checked yet. Use Check update for fresh GitHub data.</p></div><span x-show="githubConnected" class="pill" :class="latestWorkflowStatus==='success'?'border-emerald-200 bg-emerald-50 text-emerald-700':'border-amber-200 bg-amber-50 text-amber-800'" x-text="latestWorkflowStatus"></span></div>
+                <div x-show="githubConnected" class="mt-4 grid grid-cols-2 gap-3 text-sm">
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Run</span><b class="mt-1 block text-lg" x-text="latestWorkflowNumber"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Commit</span><code class="mt-1 block font-bold" x-text="latestWorkflowCommitShort"></code></div>
+                  <div class="col-span-2 rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Updated</span><b class="mt-1 block" x-text="latestWorkflowTime"></b></div>
+                </div>
+                <p x-show="githubError" class="mt-3 text-sm text-rose-600" x-text="githubErrorMessage"></p>
+              </div>
+              <div class="panel">
+                <div class="flex items-start justify-between gap-3"><div><h2 class="font-bold">Update</h2><p class="muted mt-1" x-text="updateMessage"></p></div><span x-show="githubInfo" class="pill" :class="githubInfo&&githubInfo.updateAvailable?'border-amber-200 bg-amber-50 text-amber-800':'border-emerald-200 bg-emerald-50 text-emerald-700'" x-text="githubInfo&&githubInfo.updateAvailable?'1 deployable':'0 deployable'"></span></div>
+                <div x-show="githubInfo" class="mt-4 grid grid-cols-2 gap-3 text-sm">
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Artifact ID</span><b class="mt-1 block text-lg" x-text="candidateArtifactId"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Candidate</span><code class="mt-1 block font-bold" x-text="candidateCommitShort"></code></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Deployed</span><code class="mt-1 block font-bold" x-text="deployedCommitShort"></code></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Source ahead</span><b class="mt-1 block text-lg" x-text="sourceCommitsAhead"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Deployable ahead</span><b class="mt-1 block text-lg" x-text="deployableCommitsAhead"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Artifact size</span><b class="mt-1 block" x-text="candidateArtifactSize"></b></div>
+                </div>
+                <div class="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">Performance mode: GitHub, health, releases and files remain on-demand and cached per application for this session.</div>
+              </div>
+            </div>
           </div>
           <div x-show="projectTab==='deploy'" class="space-y-5">
             <div x-show="githubNeedsConnection" class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"><b>GitHub connection required.</b> Connect a GitHub token before checking workflows or deploying artifacts. <button type="button" @click="go('settings')" class="ml-2 font-semibold underline">Open Connections</button></div>
@@ -1278,7 +1379,7 @@ document.querySelector('#app').innerHTML=`
               <div class="job-row">
                 <span class="deployment-watch-icon"><i data-lucide="refresh-cw" class="h-4 w-4 animate-spin"></i></span>
                 <div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><b class="truncate" x-text="w.projectName||w.projectId"></b><span class="pill capitalize" x-text="w.status"></span></div><p class="mt-1 text-xs text-slate-500"><span class="capitalize" x-text="deploymentWatchLabel(w)"></span> · <span x-text="w.run"></span> · artifact <span x-text="w.artifact"></span></p></div>
-                <button @click="openProjectTab(w.projectId,'deploy')" class="btn py-1.5 text-xs">Open</button>
+                <button @click="openVerificationJob(w.requestId)" class="btn py-1.5 text-xs">Verify</button>
               </div>
             </template>
           </div>
@@ -1294,11 +1395,83 @@ document.querySelector('#app').innerHTML=`
               <div class="mb-4"><h2 class="font-bold">Recent deployment jobs</h2><p class="muted mt-1">Exact request, artifact and outcome retained by the control plane.</p></div>
               <div x-show="recentDeploymentJobs.length===0" class="empty-state">No deployment jobs recorded yet.</div>
               <template x-for="j in recentDeploymentJobs" :key="j.requestId">
-                <button @click="openProjectTab(j.project,'deploy')" class="row w-full text-left">
+                <button @click="openVerificationJob(j.requestId)" class="row w-full text-left">
                   <span class="min-w-0"><b class="block truncate" x-text="j.projectName||j.project"></b><small class="block truncate text-slate-500"><span x-text="deploymentJobIdentity(j)"></span> · <span class="capitalize" x-text="deploymentJobPhase(j)"></span></small></span>
                   <span class="text-right"><span class="pill capitalize" :class="j.state==='failed'?'border-rose-200 bg-rose-50 text-rose-700':j.state==='deployed'?'border-emerald-200 bg-emerald-50 text-emerald-700':''" x-text="j.state"></span><small class="mt-1 block text-slate-400" x-text="formatDate(j.updatedAt)"></small></span>
                 </button>
               </template>
+            </div>
+          </div>
+        </section>
+
+        <section data-digiops-page="verification" x-show="page==='verification'" class="space-y-6">
+          <div class="page-heading">
+            <div><p class="eyebrow">Observe</p><h1>Verification Center</h1><p>Step-by-step deployment evidence from DigiOps durable local state. No GitHub or target fan-out occurs just by opening this page.</p></div>
+            <div class="flex gap-2"><button @click="verifyDeploymentWatches()" class="btn"><i data-lucide="refresh-cw" class="h-4 w-4"></i>Recheck now</button><button @click="openHelp('verification')" class="btn"><i data-lucide="circle-help" class="h-4 w-4"></i>Verification model</button></div>
+          </div>
+
+          <div class="fleet-strip">
+            <div class="fleet-chip"><span>Recent jobs</span><b x-text="verificationStats.total"></b></div>
+            <div class="fleet-chip"><span>Active</span><b class="text-blue-700" x-text="verificationStats.active"></b></div>
+            <div class="fleet-chip"><span>Health verified</span><b class="text-emerald-700" x-text="verificationStats.verified"></b></div>
+            <div class="fleet-chip"><span>Needs attention</span><b class="text-amber-700" x-text="verificationStats.attention"></b></div>
+            <div class="fleet-chip"><span>Failed</span><b class="text-rose-700" x-text="verificationStats.failed"></b></div>
+          </div>
+
+          <div class="grid gap-5 xl:grid-cols-[.8fr_1.2fr]">
+            <div class="panel">
+              <div class="mb-4"><h2 class="font-bold">Deployment attempts</h2><p class="muted mt-1">Newest first. Select a request to inspect every recorded checkpoint.</p></div>
+              <div x-show="verificationJobs.length===0" class="empty-state">No deployment verification records yet.</div>
+              <div class="divide-y divide-slate-100">
+                <template x-for="j in verificationJobs" :key="j.requestId">
+                  <button @click="selectVerificationJob(j.requestId)" class="w-full py-3 text-left" :class="selectedVerificationJob&&selectedVerificationJob.requestId===j.requestId?'bg-blue-50/60':''">
+                    <div class="flex items-start justify-between gap-3 px-2">
+                      <span class="min-w-0"><b class="block truncate text-sm" x-text="j.projectName||j.project"></b><small class="mt-1 block truncate text-slate-500"><span x-text="deploymentJobIdentity(j)"></span> · <code x-text="deploymentJobCommit(j)"></code></small><small class="mt-1 block capitalize text-slate-400" x-text="deploymentJobPhase(j)"></small></span>
+                      <span class="text-right"><span class="pill capitalize" :class="verificationTone(j.state==='failed'?'failed':j.phase==='health-attention'?'attention':j.state==='deployed'?'passed':j.state==='unavailable'?'unavailable':'running')" x-text="j.state"></span><small class="mt-1 block text-slate-400" x-text="formatDate(j.updatedAt)"></small></span>
+                    </div>
+                  </button>
+                </template>
+              </div>
+            </div>
+
+            <div class="space-y-5">
+              <div x-show="!selectedVerificationJob" class="panel empty-state">Select a deployment attempt to inspect verification evidence.</div>
+              <div x-show="selectedVerificationJob" class="panel">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div><p class="text-sm font-medium text-blue-600">Selected deployment</p><h2 class="mt-1 text-xl font-bold" x-text="selectedVerificationJob&&(selectedVerificationJob.projectName||selectedVerificationJob.project)"></h2><p class="muted mt-1"><span x-text="selectedVerificationJob&&deploymentJobIdentity(selectedVerificationJob)"></span> · commit <code x-text="selectedVerificationJob&&deploymentJobCommit(selectedVerificationJob)"></code></p></div>
+                  <span class="pill capitalize" :class="selectedVerificationJob&&verificationTone(selectedVerificationJob.state==='failed'?'failed':selectedVerificationJob.phase==='health-attention'?'attention':selectedVerificationJob.state==='deployed'?'passed':selectedVerificationJob.state==='unavailable'?'unavailable':'running')" x-text="selectedVerificationJob&&selectedVerificationJob.state"></span>
+                </div>
+
+                <div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3 text-sm">
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Request ID</span><code class="mt-1 block truncate" :title="selectedVerificationJob&&selectedVerificationJob.requestId" x-text="selectedVerificationJob&&selectedVerificationJob.requestId"></code></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Target</span><b class="mt-1 block" x-text="selectedVerificationJob&&targetName(selectedVerificationJob.targetId||'local')"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Progress</span><b class="mt-1 block text-lg" x-text="selectedVerificationJob?String(selectedVerificationJob.progress||0)+'%':'—'"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Started</span><b class="mt-1 block text-xs" x-text="selectedVerificationJob&&formatDate(selectedVerificationJob.startedAt||selectedVerificationJob.createdAt)"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Updated</span><b class="mt-1 block text-xs" x-text="selectedVerificationJob&&formatDate(selectedVerificationJob.updatedAt)"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Release</span><code class="mt-1 block truncate" x-text="selectedVerificationJob&&(selectedVerificationJob.release||'—')"></code></div>
+                </div>
+
+                <div x-show="selectedVerificationJob&&selectedVerificationJob.error" class="mt-5 rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                  <div class="flex items-center gap-2 text-sm font-bold text-rose-800"><i data-lucide="activity" class="h-4 w-4"></i>Exact failure evidence</div>
+                  <code class="mt-2 block break-all text-xs text-rose-700" x-text="selectedVerificationJob&&selectedVerificationJob.error"></code>
+                  <p class="mt-2 text-xs leading-5 text-rose-700" x-text="selectedVerificationJob&&verificationErrorHint(selectedVerificationJob)"></p>
+                </div>
+              </div>
+
+              <div x-show="selectedVerificationJob" class="panel">
+                <div class="mb-4 flex items-start justify-between gap-3"><div><h2 class="font-bold">Verification checkpoints</h2><p class="muted mt-1">Each line is server-retained evidence. A failure remains attached to the checkpoint where it occurred.</p></div><button @click="selectedVerificationJob&&openProjectTab(selectedVerificationJob.project,'deploy')" class="btn py-1.5 text-xs">Open application</button></div>
+                <div class="space-y-3">
+                  <template x-for="step in verificationSteps(selectedVerificationJob)" :key="step.key">
+                    <div class="rounded-2xl border border-slate-200 p-4">
+                      <div class="flex flex-wrap items-start justify-between gap-3">
+                        <div class="min-w-0"><div class="flex items-center gap-2"><span class="status-dot" :class="step.status==='passed'?'bg-emerald-500':step.status==='failed'?'bg-rose-500':step.status==='attention'||step.status==='unavailable'?'bg-amber-500':'bg-blue-500'"></span><b class="capitalize" x-text="verificationStepLabel(step)"></b></div><p class="mt-1 text-xs text-slate-500"><span x-text="step.source||'control-plane'"></span> · <span x-text="formatDate(step.updatedAt||step.startedAt)"></span></p></div>
+                        <span class="pill capitalize" :class="verificationTone(step.status)" x-text="step.status"></span>
+                      </div>
+                      <code x-show="step.error" class="mt-3 block break-all rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700" x-text="step.error"></code>
+                    </div>
+                  </template>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -1326,7 +1499,8 @@ document.querySelector('#app').innerHTML=`
           <div class="page-heading"><div><p class="eyebrow">Learn</p><h1>Help & Guide</h1><p>Concise operating guidance for deployment, recovery, health, targets and runtime identity.</p></div></div>
           <div class="guide-grid">
             <button @click="openHelp('dashboard')" class="guide-card"><span class="guide-icon"><i data-lucide="layout-dashboard"></i></span><b>Command Center</b><p>Understand attention, active deployments and last-known fleet state.</p></button>
-            <button @click="openHelp('deployments')" class="guide-card"><span class="guide-icon"><i data-lucide="rocket"></i></span><b>Deployment Center</b><p>Candidate review, transactional publication, verification and job history.</p></button>
+            <button @click="openHelp('deployments')" class="guide-card"><span class="guide-icon"><i data-lucide="rocket"></i></span><b>Deployment Center</b><p>Candidate review, transactional publication and job history.</p></button>
+            <button @click="openHelp('verification')" class="guide-card"><span class="guide-icon"><i data-lucide="shield-check"></i></span><b>Verification Center</b><p>Checkpoint-by-checkpoint evidence, exact failure stage, source and error code.</p></button>
             <button @click="openHelp('health')" class="guide-card"><span class="guide-icon"><i data-lucide="heart-pulse"></i></span><b>Health & Readiness</b><p>Availability, runtime, storage and health freshness.</p></button>
             <button @click="openHelp('targets')" class="guide-card"><span class="guide-icon"><i data-lucide="server"></i></span><b>Targets & Agents</b><p>Agent capabilities, secure remote execution and compatibility.</p></button>
             <button @click="openHelp('settings')" class="guide-card"><span class="guide-icon"><i data-lucide="settings-2"></i></span><b>Connections & Runtime</b><p>GitHub, Redis, cache policy and exact running build identity.</p></button>

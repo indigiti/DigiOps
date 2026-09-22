@@ -90,9 +90,9 @@ Each deployment has a durable JSON job record under:
 
 `private_html/digiops/jobs/deployments/<request-id>.json`
 
-The record contains project, target, commit, workflow/artifact identity, artifact digest when available, actor, state, phase, timestamps, release and post-deploy health result.
+The record contains project, target, commit, workflow/artifact identity, artifact digest when available, actor, state, phase, timestamps, release and post-deploy health result. It also retains a chronological `verification` ledger. Each checkpoint records phase, human label, status, evidence source, exact error when present, and start/update/completion timestamps.
 
-The browser reconstructs active work from this server journal after navigation, reload or sign-in. Browser state is not the system of record.
+The browser reconstructs active work from this server journal after navigation, reload or sign-in. Browser state is not the system of record. The Verification Center reads this local journal only, so opening it does not fan out to GitHub or deployment targets; explicit recheck actions are used when fresh authoritative confirmation is required.
 
 ## Artifact integrity
 

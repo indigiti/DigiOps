@@ -18,6 +18,7 @@ const checks=[
   ['UI follows authoritative watcher state', ui.includes("watch.status==='deployed'") && ui.includes("watch.status==='failed'") && ui.includes("watch.status=status&&status.state")],
   ['UI prevents duplicate deploy while verification is active', ui.includes('selectedDeploymentWatch') && ui.includes('Verification running')],
   ['Control plane exposes server-side deployment jobs', jobsApi.includes('DeploymentJobRepository') && jobRepo.includes("jobs/deployments") && jobRepo.includes('latestForProject')],
+  ['Deployment jobs retain a verification ledger', jobRepo.includes("'verification'=>[]") && jobRepo.includes('updateVerification') && ui.includes('Verification Center') && ui.includes('verificationSteps')],
   ['Deploy endpoint creates durable job before long work', deploy.includes("$jobs->create") && deploy.includes("'phase'=>'candidate-validation'")],
   ['Deploy status persists authoritative state into job journal', status.includes('DeploymentJobRepository') && status.includes("$jobs->patch")],
   ['Post-deploy health is attached to deployment job', health.includes('DeploymentJobRepository') && health.includes("'health-verified'")],

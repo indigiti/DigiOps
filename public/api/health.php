@@ -55,6 +55,8 @@ try {
                 'http'=>$result['http']??null,
             ],
             'phase'=>($result['ok']??false)?'health-verified':'health-attention',
+            'verificationSource'=>(($target['id']??'local')==='local'?'local-health':'remote-health'),
+            'error'=>($result['ok']??false)?'':('HEALTH_CHECK_FAILED'.(isset($result['http']['status'])?'_HTTP_'.$result['http']['status']:'')),
         ]);
     }
 

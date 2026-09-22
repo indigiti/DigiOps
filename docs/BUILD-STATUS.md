@@ -2,7 +2,7 @@
 
 ## Release
 
-**v1.7.1 — Security & Release Integrity**
+**v1.8.0 — Verification Center**
 
 ## Control plane
 
@@ -12,6 +12,7 @@
 - [x] Durable deployment job journal
 - [x] Background verification recoverable across browser reload/device changes
 - [x] Post-deploy health attached to deployment jobs
+- [x] Durable checkpoint-by-checkpoint verification ledger with exact failure stage and evidence source
 - [x] Health freshness retained in project registry
 
 ## Publication safety
@@ -63,6 +64,7 @@
 - [x] Command Center
 - [x] Applications
 - [x] Deployment Center
+- [x] Verification Center with active/passed/attention/failed counts and exact error evidence
 - [x] Health & Readiness
 - [x] Deployment Targets
 - [x] Connections & Runtime
@@ -70,6 +72,7 @@
 - [x] Help & Guide
 - [x] durable deployment activity instead of browser-only progress
 - [x] health freshness displayed in the UI
+- [x] application overview exposes workflow run, artifact ID, candidate/deployed commit and source/deployable gap without opening the deploy tab
 
 ## CI
 

@@ -11,6 +11,25 @@ final class DeploymentJobRepository
 {
     private string $dir;
 
+    private const PHASE_LABELS = [
+        'created'=>'Created',
+        'candidate-validation'=>'Candidate validation',
+        'preflight'=>'Preflight',
+        'downloading-artifact'=>'Artifact download',
+        'artifact-verified'=>'Artifact integrity',
+        'remote-upload'=>'Target upload',
+        'validating'=>'Payload validation',
+        'snapshotting'=>'Pre-deploy snapshot',
+        'staging-release'=>'Release staging',
+        'publishing'=>'Publication',
+        'switching'=>'Atomic switch',
+        'authoritative-confirmation'=>'Authoritative confirmation',
+        'complete'=>'Authoritative confirmation',
+        'health-verified'=>'Health verification',
+        'health-attention'=>'Health verification',
+        'failed'=>'Deployment failure',
+    ];
+
     public function __construct(?string $dir = null)
     {
         $this->dir = $dir ?: DIGIOPS_PRIVATE_ROOT . '/jobs/deployments';
@@ -38,6 +57,8 @@ final class DeploymentJobRepository
             'release'=>'',
             'error'=>'',
             'health'=>null,
+            'verificationSource'=>'',
+            'verification'=>[],
             'createdAt'=>$now,
             'startedAt'=>$now,
             'updatedAt'=>$now,
@@ -46,6 +67,7 @@ final class DeploymentJobRepository
         $record['requestId']=$requestId;
         $record['project']=$project;
         $record['updatedAt']=$now;
+        $record['verification']=$this->updateVerification([], $record, $record, $now);
         $file=$this->file($requestId);
         return Files::mutateJson($file, [], static function(array $existing) use ($record,$project): array {
             if($existing){
@@ -62,13 +84,15 @@ final class DeploymentJobRepository
         $file=$this->file($requestId);
         return Files::mutateJson($file, [], function(array $current) use ($requestId,$patch): array {
             if (!$current) throw new RuntimeException('DEPLOYMENT_JOB_NOT_FOUND');
+            $now=date(DATE_ATOM);
             $next=array_merge($current,$patch);
             $next['requestId']=$requestId;
             $next['progress']=max(0,min(100,(int)($next['progress']??0)));
-            $next['updatedAt']=date(DATE_ATOM);
+            $next['updatedAt']=$now;
             if (in_array((string)($next['state']??''),['deployed','failed','cancelled','attention'],true) && empty($next['completedAt'])) {
-                $next['completedAt']=date(DATE_ATOM);
+                $next['completedAt']=$now;
             }
+            $next['verification']=$this->updateVerification($current,$next,$patch,$now);
             return $next;
         });
     }
@@ -109,6 +133,62 @@ final class DeploymentJobRepository
         $project=PathGuard::slug($project);
         foreach ($this->all(200) as $row) if (($row['project']??'')===$project) return $row;
         return null;
+    }
+
+    private function updateVerification(array $current, array $next, array $patch, string $now): array
+    {
+        $history=is_array($current['verification']??null) ? array_values(array_filter($current['verification'],'is_array')) : [];
+        $phase=(string)($next['phase']??'created');
+        if($phase==='')$phase='created';
+        $state=(string)($next['state']??'queued');
+        $source=(string)($patch['verificationSource']??($next['verificationSource']??''));
+        $error=array_key_exists('error',$patch) ? (string)$patch['error'] : '';
+        $status=$this->verificationStatus($state,$phase,$error);
+
+        $lastIndex=count($history)-1;
+        $last=$lastIndex>=0 ? $history[$lastIndex] : null;
+        $lastPhase=is_array($last) ? (string)($last['phase']??'') : '';
+
+        if($lastPhase!=='' && $lastPhase!==$phase && in_array((string)($last['status']??''),['running','waiting','unavailable'],true)){
+            $history[$lastIndex]['status']='passed';
+            $history[$lastIndex]['updatedAt']=$now;
+            $history[$lastIndex]['completedAt']=$now;
+            if((string)($history[$lastIndex]['error']??'')!=='')$history[$lastIndex]['error']='';
+        }
+
+        if($lastPhase===$phase){
+            $history[$lastIndex]['status']=$status;
+            $history[$lastIndex]['updatedAt']=$now;
+            if($source!=='')$history[$lastIndex]['source']=$source;
+            if($error!=='')$history[$lastIndex]['error']=$error;
+            elseif(in_array($status,['passed','running','waiting'],true))$history[$lastIndex]['error']='';
+            if(in_array($status,['passed','failed','attention'],true))$history[$lastIndex]['completedAt']=$now;
+            return array_slice($history,-40);
+        }
+
+        $history[]=[
+            'phase'=>$phase,
+            'label'=>self::PHASE_LABELS[$phase]??ucwords(str_replace(['-','_'],' ',$phase)),
+            'status'=>$status,
+            'progress'=>(int)($next['progress']??0),
+            'source'=>$source,
+            'error'=>$error,
+            'startedAt'=>$now,
+            'updatedAt'=>$now,
+            'completedAt'=>in_array($status,['passed','failed','attention'],true)?$now:null,
+        ];
+        return array_slice($history,-40);
+    }
+
+    private function verificationStatus(string $state, string $phase, string $error): string
+    {
+        if($state==='failed')return 'failed';
+        if($phase==='health-attention' || $state==='attention')return 'attention';
+        if($state==='unavailable')return 'unavailable';
+        if(in_array($state,['queued','pending'],true))return 'waiting';
+        if($state==='deployed' || $phase==='health-verified' || $phase==='complete')return 'passed';
+        if($error!=='')return 'attention';
+        return 'running';
     }
 
     private function file(string $requestId): string
