@@ -50,8 +50,8 @@ try{
 }catch(RuntimeException $e){
     if(!str_starts_with($e->getMessage(),'OVERLAY_TYPE_CONFLICT_EXPECTED_DIRECTORY:conflict')) throw $e;
 }
-
-
+@unlink($target.'/conflict');
+@rmdir($source.'/conflict');
 
 Files::ensureDir($source.'/go-engine/bin/releases/release-a/modules');
 Files::ensureDir($target.'/go-engine/bin/releases/release-a/modules');
