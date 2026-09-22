@@ -213,7 +213,7 @@ try {
 } catch (Throwable $e) {
     if($jobCreated && preg_match('/^[a-f0-9]{32}$/',$requestId)){
         $message=$e->getMessage();
-        $ambiguous=(bool)preg_match('/TARGET_CONNECT_FAILED|HTTP_50[234]|INVALID_RESPONSE|CURLE_|TIMEOUT|Failed to fetch|NetworkError/i',$message);
+        $ambiguous=str_starts_with($message,'REMOTE_COMMIT_UNCERTAIN_');
         try{
             $currentJob=$jobs->get($requestId);
             $failurePhase=(string)($currentJob['phase']??'failed');
@@ -221,7 +221,7 @@ try {
                 'state'=>'unavailable',
                 'phase'=>'authoritative-confirmation',
                 'error'=>$message,
-                'verificationSource'=>'deploy-response',
+                'verificationSource'=>'remote-commit-response',
             ] : [
                 'state'=>'failed',
                 'phase'=>$failurePhase!==''?$failurePhase:'failed',
@@ -232,5 +232,15 @@ try {
             ]);
         }catch(Throwable){}
     }
-    JsonResponse::send(['error'=>$e->getMessage(),'requestId'=>$requestId?:null],400);
+    $job=null;
+    if($jobCreated && preg_match('/^[a-f0-9]{32}$/',$requestId)){
+        try{$job=$jobs->get($requestId);}catch(Throwable){}
+    }
+    JsonResponse::send([
+        'error'=>$e->getMessage(),
+        'requestId'=>$requestId?:null,
+        'state'=>is_array($job)?($job['state']??null):null,
+        'phase'=>is_array($job)?($job['phase']??null):null,
+        'progress'=>is_array($job)?($job['progress']??null):null,
+    ],400);
 }
