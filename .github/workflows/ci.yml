@@ -17,6 +17,11 @@ jobs:
         with:
           node-version: 22
       - run: npm install
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digiops-package-lock
+          path: package-lock.json
+          if-no-files-found: error
       - run: npm run check:csp
       - run: node tools/check-pretty-routes.mjs
       - run: node tools/check-deploy-state-machine.mjs
@@ -30,7 +35,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
 
-  artifact-certification:
+  artifact-verification:
     runs-on: ubuntu-latest
     needs: frontend
     steps:
@@ -52,7 +57,7 @@ jobs:
           grep -F "RewriteRule ^ index.html [L]" verified-release/public/.htaccess
           grep -F "Content-Security-Policy" verified-release/public/.htaccess
           grep -E 'src="/digiops/assets/|href="/digiops/' verified-release/public/index.html
-          echo "Uploaded artifact certification: PASS"
+          echo "Uploaded artifact verification: PASS"
 
   php:
     runs-on: ubuntu-latest
