@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/_bootstrap.php';
 
 use DigiOps\Audit\AuditLog;
+use DigiOps\Health\HealthOrigin;
 use DigiOps\Security\SecretVault;
 use DigiOps\Security\Session;
 use DigiOps\Support\Files;
@@ -17,6 +18,7 @@ $configFile = DIGIOPS_PRIVATE_ROOT . '/config/infrastructure.json';
 function infraConfig(string $file): array
 {
     $defaults = [
+        'applicationOrigin'=>'',
         'varnish'=>[
             'enabled'=>true,
             'bypassPath'=>'/digiops/',
@@ -199,6 +201,7 @@ try {
                 'prefix'=>$redis['prefix'],
                 'timeout'=>$redis['timeout'],
             ],
+            'applicationOrigin'=>(string)($infra['applicationOrigin']??''),
             'varnish'=>$infra['varnish'],
             'varnishPolicyConfigured'=>!empty($infra['varnish']['savedAt']),
             'serviceControl'=>false,
@@ -211,6 +214,14 @@ try {
     $data = json_decode(file_get_contents('php://input') ?: '', true);
     if (!is_array($data)) JsonResponse::send(['error'=>'INVALID_JSON'],400);
     $action = (string)($data['action'] ?? '');
+
+    if ($action === 'origin-save') {
+        $origin=HealthOrigin::normalize((string)($data['applicationOrigin']??''));
+        $infra['applicationOrigin']=$origin;
+        Files::writeJson($configFile,$infra);
+        (new AuditLog())->write('APPLICATION_ORIGIN_SAVED',['applicationOrigin'=>$origin],$user);
+        JsonResponse::send(['ok'=>true,'applicationOrigin'=>$origin]);
+    }
 
     if ($action === 'redis-save' || $action === 'redis-test') {
         $current = redisConfig($vault);
