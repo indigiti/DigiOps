@@ -39,6 +39,8 @@ try {
     $runId=(int)($data['runId']??0);
     $artifactId=(int)($data['artifactId']??0);
     $commit=trim((string)($data['commit']??''));
+    $requestId=strtolower(trim((string)($data['requestId']??'')));
+    if($requestId==='' || !preg_match('/^[a-f0-9]{32}$/',$requestId)) $requestId=bin2hex(random_bytes(16));
     $wanted=trim((string)($project['artifactName']??'digiops-release')) ?: 'digiops-release';
 
     if ($runId>0) {
@@ -85,9 +87,9 @@ try {
     try {
         $target=(new TargetService())->forProject($projectId);
         if (($target['id']??'local')==='local') {
-            $result=(new ReleaseManager())->deployArtifact($projectId,$zip,['commit'=>$commit,'artifactId'=>$artifactId],$user);
+            $result=(new ReleaseManager())->deployArtifact($projectId,$zip,['commit'=>$commit,'artifactId'=>$artifactId,'requestId'=>$requestId],$user);
         } else {
-            $result=(new RemoteDeploymentDriver())->deploy($projectId,$zip,$project,['commit'=>$commit,'artifactId'=>$artifactId]);
+            $result=(new RemoteDeploymentDriver())->deploy($projectId,$zip,$project,['commit'=>$commit,'artifactId'=>$artifactId,'requestId'=>$requestId]);
             (new ProjectRegistry())->patchRuntime($projectId,[
                 'status'=>'deployed',
                 'health'=>'pending',
@@ -105,7 +107,7 @@ try {
             ],$user);
         }
     } finally { @unlink($zip); }
-    JsonResponse::send($result);
+    JsonResponse::send(['requestId'=>$requestId]+$result);
 } catch (Throwable $e) {
     JsonResponse::send(['error'=>$e->getMessage()],400);
 }
