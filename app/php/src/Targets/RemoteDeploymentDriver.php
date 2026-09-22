@@ -23,6 +23,8 @@ final class RemoteDeploymentDriver
             'meta'=>[
                 'commit'=>(string)($meta['commit']??''),
                 'artifactId'=>(string)($meta['artifactId']??''),
+                'artifactDigest'=>(string)($meta['artifactDigest']??''),
+                'downloadSha256'=>(string)($meta['downloadSha256']??''),
                 'requestId'=>(string)($meta['requestId']??''),
             ],
         ]);
