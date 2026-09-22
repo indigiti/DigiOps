@@ -381,6 +381,9 @@ function app(){
       const status=job.state==='failed'?'failed':job.phase==='health-attention'?'attention':job.state==='unavailable'?'unavailable':job.state==='deployed'?'passed':['queued','pending'].includes(job.state)?'waiting':'running'
       return [{key:'legacy-0',phase,label:phase.replace(/[-_]+/g,' '),status,source:job.verificationSource||'legacy-job',error:job.error||'',startedAt:job.startedAt||job.createdAt||'',updatedAt:job.updatedAt||'',completedAt:job.completedAt||null}]
     },
+    verificationStepLabel(step){
+      return step&&step.label?step.label:String(step&&step.phase||'step').replace(/[-_]+/g,' ')
+    },
     verificationTone(status){
       if(status==='failed')return 'border-rose-200 bg-rose-50 text-rose-700'
       if(status==='attention'||status==='unavailable')return 'border-amber-200 bg-amber-50 text-amber-800'
@@ -1244,6 +1247,8 @@ document.querySelector('#app').innerHTML=`
                   <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Candidate</span><code class="mt-1 block font-bold" x-text="candidateCommitShort"></code></div>
                   <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Deployed</span><code class="mt-1 block font-bold" x-text="deployedCommitShort"></code></div>
                   <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Source ahead</span><b class="mt-1 block text-lg" x-text="sourceCommitsAhead"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Deployable ahead</span><b class="mt-1 block text-lg" x-text="deployableCommitsAhead"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Artifact size</span><b class="mt-1 block" x-text="candidateArtifactSize"></b></div>
                 </div>
                 <div class="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">Performance mode: GitHub, health, releases and files remain on-demand and cached per application for this session.</div>
               </div>
@@ -1402,7 +1407,7 @@ document.querySelector('#app').innerHTML=`
         <section data-digiops-page="verification" x-show="page==='verification'" class="space-y-6">
           <div class="page-heading">
             <div><p class="eyebrow">Observe</p><h1>Verification Center</h1><p>Step-by-step deployment evidence from DigiOps durable local state. No GitHub or target fan-out occurs just by opening this page.</p></div>
-            <div class="flex gap-2"><button @click="syncDeploymentWatches()" class="btn"><i data-lucide="refresh-cw" class="h-4 w-4"></i>Refresh</button><button @click="openHelp('verification')" class="btn"><i data-lucide="circle-help" class="h-4 w-4"></i>Verification model</button></div>
+            <div class="flex gap-2"><button @click="verifyDeploymentWatches()" class="btn"><i data-lucide="refresh-cw" class="h-4 w-4"></i>Recheck now</button><button @click="openHelp('verification')" class="btn"><i data-lucide="circle-help" class="h-4 w-4"></i>Verification model</button></div>
           </div>
 
           <div class="fleet-strip">
@@ -1459,7 +1464,7 @@ document.querySelector('#app').innerHTML=`
                   <template x-for="step in verificationSteps(selectedVerificationJob)" :key="step.key">
                     <div class="rounded-2xl border border-slate-200 p-4">
                       <div class="flex flex-wrap items-start justify-between gap-3">
-                        <div class="min-w-0"><div class="flex items-center gap-2"><span class="status-dot" :class="step.status==='passed'?'bg-emerald-500':step.status==='failed'?'bg-rose-500':step.status==='attention'||step.status==='unavailable'?'bg-amber-500':'bg-blue-500'"></span><b class="capitalize" x-text="step.label||String(step.phase||'step').replace(/[-_]+/g,' ')"></b></div><p class="mt-1 text-xs text-slate-500"><span x-text="step.source||'control-plane'"></span> · <span x-text="formatDate(step.updatedAt||step.startedAt)"></span></p></div>
+                        <div class="min-w-0"><div class="flex items-center gap-2"><span class="status-dot" :class="step.status==='passed'?'bg-emerald-500':step.status==='failed'?'bg-rose-500':step.status==='attention'||step.status==='unavailable'?'bg-amber-500':'bg-blue-500'"></span><b class="capitalize" x-text="verificationStepLabel(step)"></b></div><p class="mt-1 text-xs text-slate-500"><span x-text="step.source||'control-plane'"></span> · <span x-text="formatDate(step.updatedAt||step.startedAt)"></span></p></div>
                         <span class="pill capitalize" :class="verificationTone(step.status)" x-text="step.status"></span>
                       </div>
                       <code x-show="step.error" class="mt-3 block break-all rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700" x-text="step.error"></code>
