@@ -2,7 +2,7 @@
 
 ## Release
 
-**v1.8.3 — Artifact Download Resilience**
+**v1.8.4 — Health Visibility**
 
 ## Control plane
 
@@ -80,6 +80,8 @@
 - [x] Help & Guide
 - [x] durable deployment activity instead of browser-only progress
 - [x] health freshness displayed in the UI
+- [x] Resolved full health URL shown in application Settings and Health views
+- [x] Detailed health result persisted across reloads with explicit Check now action
 - [x] application overview exposes workflow run, artifact ID, candidate/deployed commit and source/deployable gap without opening the deploy tab
 
 ## CI
