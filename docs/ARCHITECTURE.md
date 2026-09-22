@@ -68,6 +68,7 @@ The complete mandatory rules are defined in [CLOUDWAYS-RULESET.md](CLOUDWAYS-RUL
 15. Deployment success and post-deploy health are separate outcomes; a health failure must never relabel an already-published deployment as failed.
 16. Only an uncertain response to the remote commit/publish request may enter authoritative-confirmation mode; pre-deploy source/API failures are terminal for that attempt.
 17. Remote agents independently enforce `public_html/` for public paths and `private_html/` for private paths.
+18. DigiOps self-release private payloads may contain only `app/`, `agent/`, and `build/`; persistent state directories are rejected before publication or rollback.
 
 ## Deployment lifecycle
 
