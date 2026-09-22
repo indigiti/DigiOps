@@ -16,15 +16,38 @@ public_html/
 
 private_html/
   digiops/
+    app/
+    build/
     registry/
     jobs/
     audit/
     vault/
+    users/
+    projects/
+    rate/
+    config/
   app1/
   app2/
 ```
 
-Public folders contain browser/runtime payloads. Private folders contain credentials, registries, deployment jobs, releases, logs, manifests and application-private runtime data.
+Public folders contain browser/runtime payloads. Under `private_html/digiops/`, deployable code and persistent runtime state are deliberately separated. Git/release deployment may update `app/` and `build/`; persistent state such as users, vault, registry, projects, jobs, audit, rate and configuration must survive every deployment.
+
+## Cloudways Git rule set
+
+DigiOps uses two repository branch roles:
+
+- `main` is the source/review branch.
+- `cloudways` is the Cloudways deployment bootstrap branch and is intentionally not a mirror of `main`.
+
+The Cloudways branch pins an approved `main` source SHA together with the exact release artifact ID and SHA-256 digest. Cloudways pulls that branch into `public_html/digiops/`; the bootstrap then installs the pinned public and private release payloads.
+
+Required traceability is:
+
+`main commit -> GitHub Actions release artifact -> cloudways pin -> Cloudways pull -> installed runtime`
+
+The Cloudways branch must be updated only from an approved `main` build after required CI checks complete. Never merge `cloudways` back into `main`, and never let Cloudways Git deployment delete or replace persistent private runtime state.
+
+The complete mandatory rules are defined in [CLOUDWAYS-RULESET.md](CLOUDWAYS-RULESET.md).
 
 ## Control-plane invariants
 
@@ -40,6 +63,8 @@ Public folders contain browser/runtime payloads. Private folders contain credent
 10. Operators can leave/reload the UI while server-side deployment continues.
 11. Post-deploy health is recorded against the deployment job.
 12. Audit events are hash chained under an exclusive writer lock.
+13. Cloudways Git deployment must preserve persistent state under `private_html/digiops/`.
+14. Every deployed DigiOps build must be traceable to its exact `main` commit and release artifact.
 
 ## Deployment lifecycle
 
