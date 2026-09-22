@@ -7,6 +7,7 @@ const ICONS={Activity,AppWindow,ArrowLeft,Boxes,CheckCircle2,ChevronDown,CircleG
 const icons=()=>queueMicrotask(()=>createIcons({icons:ICONS}))
 const APP_BASE=(import.meta.env.BASE_URL||'/digiops/').replace(/\/+$/,'')+'/'
 const appUrl=(path='')=>APP_BASE+String(path||'').replace(/^\/+/,'')
+const deploymentRequestId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('')
 
 const renderNativePathPreview=()=>{
   const slugInput=document.getElementById('digiops-app-slug')
