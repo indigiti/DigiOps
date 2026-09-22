@@ -18,7 +18,9 @@ try {
     $target=(new TargetService())->forProject($id);
     if(($target['id']??'local')==='local') JsonResponse::send((new HealthService())->probe($id));
     $result=(new RemoteDeploymentDriver())->health($id,$project);
-    (new ProjectRegistry())->patchRuntime($id,['health'=>($result['ok']??false)?'healthy':'attention']);
+    $checkedAt=(string)($result['checkedAt']??date(DATE_ATOM));
+    (new ProjectRegistry())->patchRuntime($id,['health'=>($result['ok']??false)?'healthy':'attention','healthCheckedAt'=>$checkedAt]);
+    $result['checkedAt']=$checkedAt;
     JsonResponse::send($result);
 }
 catch (Throwable $e) { JsonResponse::send(['error'=>$e->getMessage()],400); }
