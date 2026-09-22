@@ -28,6 +28,15 @@ try{
     if($e->getMessage()!=='JSON_STATE_INVALID') throw $e;
 }
 
+$projectFile=$root.'/private/registry/projects.json';
+file_put_contents($projectFile,json_encode([['id'=>'bad project','repo'=>'indigiti/example','branch'=>'main']]));
+try{
+    (new ProjectRegistry($projectFile))->all();
+    throw new RuntimeException('INVALID_PROJECT_RECORD_ACCEPTED');
+}catch(RuntimeException $e){
+    if($e->getMessage()!=='PROJECT_REGISTRY_INVALID') throw $e;
+}
+
 $targetFile=$root.'/private/registry/targets.json';
 file_put_contents($targetFile,'{broken');
 try{
@@ -35,6 +44,14 @@ try{
     throw new RuntimeException('CORRUPT_TARGET_REGISTRY_ACCEPTED');
 }catch(RuntimeException $e){
     if($e->getMessage()!=='JSON_STATE_INVALID') throw $e;
+}
+
+file_put_contents($targetFile,json_encode([['id'=>'remote-1','endpoint'=>'http://insecure.example']]));
+try{
+    (new TargetRegistry($targetFile))->all();
+    throw new RuntimeException('INVALID_TARGET_RECORD_ACCEPTED');
+}catch(RuntimeException $e){
+    if($e->getMessage()!=='TARGET_REGISTRY_INVALID') throw $e;
 }
 
 Files::removeTree($root);
