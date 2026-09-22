@@ -35,7 +35,7 @@ try {
     if(!$project) JsonResponse::send(['error'=>'PROJECT_NOT_FOUND'],404);
 
     $registryCommit=strtolower(trim((string)($project['commit']??'')));
-    if($registryCommit===$commit){
+    if($requestId==='' && $registryCommit===$commit){
         JsonResponse::send([
             'ok'=>true,'state'=>'deployed','reconciled'=>false,
             'commit'=>$commit,'requestId'=>$requestId,
@@ -50,7 +50,7 @@ try {
         $deployment=(new ReleaseManager())->deploymentState($projectId);
         $deploymentCommit=strtolower(trim((string)($deployment['commit']??'')));
         $deploymentRequestId=strtolower(trim((string)($deployment['requestId']??'')));
-        $deploymentMatches=$deploymentCommit===$commit && ($requestId==='' || $deploymentRequestId==='' || hash_equals($deploymentRequestId,$requestId));
+        $deploymentMatches=$deploymentCommit===$commit && ($requestId==='' || ($deploymentRequestId!=='' && hash_equals($deploymentRequestId,$requestId)));
         if($deploymentMatches){
             $state=strtolower(trim((string)($deployment['state']??'')));
             if($state==='deployed'){
@@ -100,7 +100,7 @@ try {
         $current=is_array($remote['current']??null)?$remote['current']:[];
         $currentCommit=strtolower(trim((string)($current['commit']??'')));
         $currentRequestId=strtolower(trim((string)($current['requestId']??'')));
-        $currentMatches=$currentCommit===$commit && ($requestId==='' || $currentRequestId==='' || hash_equals($currentRequestId,$requestId));
+        $currentMatches=$currentCommit===$commit && ($requestId==='' || ($currentRequestId!=='' && hash_equals($currentRequestId,$requestId)));
         if($currentMatches){
             $releaseId=(string)($current['release']??'Recovered release');
             $lastDeploy=(string)($current['lastDeploy']??date(DATE_ATOM));
@@ -124,7 +124,7 @@ try {
         $deployment=is_array($remote['deployment']??null)?$remote['deployment']:[];
         $deploymentCommit=strtolower(trim((string)($deployment['commit']??'')));
         $deploymentRequestId=strtolower(trim((string)($deployment['requestId']??'')));
-        $deploymentMatches=$deploymentCommit===$commit && ($requestId==='' || $deploymentRequestId==='' || hash_equals($deploymentRequestId,$requestId));
+        $deploymentMatches=$deploymentCommit===$commit && ($requestId==='' || ($deploymentRequestId!=='' && hash_equals($deploymentRequestId,$requestId)));
         if($deploymentMatches){
             $remoteState=strtolower(trim((string)($deployment['state']??'')));
             if(in_array($remoteState,['uploading','running'],true)){
