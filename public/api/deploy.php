@@ -81,11 +81,33 @@ try {
 
     if ($runId<=0 || $artifactId<=0 || $commit==='') throw new RuntimeException('DEPLOY_CANDIDATE_INVALID');
 
+    // Fail fast before downloading a large artifact or mutating a target.
+    $targetService=new TargetService();
+    $target=$targetService->forProject($projectId);
+    if (($target['id']??'local')==='local') {
+        if (!class_exists('ZipArchive')) throw new RuntimeException('PREFLIGHT_ZIP_EXTENSION_MISSING');
+        if (!is_dir(DIGIOPS_PRIVATE_ROOT) || !is_writable(DIGIOPS_PRIVATE_ROOT)) throw new RuntimeException('PREFLIGHT_PRIVATE_STORAGE_NOT_WRITABLE');
+        $publicParent=DIGIOPS_APP_HOME . '/' . dirname((string)$project['publicPath']);
+        if (is_dir($publicParent) && !is_writable($publicParent)) throw new RuntimeException('PREFLIGHT_PUBLIC_PARENT_NOT_WRITABLE');
+    } else {
+        $probe=$targetService->test((string)$target['id']);
+        $caps=array_values(array_filter((array)($probe['capabilities']??[]),'is_string'));
+        foreach(['deploy-chunked','deployment-status'] as $requiredCapability){
+            if(!in_array($requiredCapability,$caps,true)) throw new RuntimeException('TARGET_AGENT_UPGRADE_REQUIRED_'.$requiredCapability);
+        }
+    }
+
     Files::ensureDir(DIGIOPS_PRIVATE_ROOT . '/tmp');
     $zip=DIGIOPS_PRIVATE_ROOT . '/tmp/artifact-' . bin2hex(random_bytes(6)) . '.zip';
     $client->downloadArtifact($project['repo'],$artifactId,$zip);
+    $artifactBytes=filesize($zip);
+    if($artifactBytes===false || $artifactBytes<1) throw new RuntimeException('ARTIFACT_DOWNLOAD_EMPTY');
+    if(($target['id']??'local')==='local'){
+        $free=@disk_free_space(dirname(DIGIOPS_PRIVATE_ROOT));
+        $minimum=max(64*1024*1024,$artifactBytes*4);
+        if(is_float($free) && $free<$minimum) throw new RuntimeException('PREFLIGHT_DISK_SPACE_LOW');
+    }
     try {
-        $target=(new TargetService())->forProject($projectId);
         if (($target['id']??'local')==='local') {
             $result=(new ReleaseManager())->deployArtifact($projectId,$zip,['commit'=>$commit,'artifactId'=>$artifactId,'requestId'=>$requestId],$user);
         } else {
