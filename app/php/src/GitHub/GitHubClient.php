@@ -281,7 +281,7 @@ final class GitHubClient
 
     private function isRetryableArtifactError(string $message): bool
     {
-        if(preg_match('/^ARTIFACT_(?:API|BLOB)_FAILED_(?:0|408|425|429|5\d\d)_CURL_(?:6|7|18|28|35|52|55|56|92)(?:_|:|$)/',$message)) return true;
+        if(preg_match('/^ARTIFACT_(?:API|BLOB)_FAILED_\d{1,3}_CURL_(?:6|7|18|28|35|52|55|56|92)(?:_|:|$)/',$message)) return true;
         if(preg_match('/^ARTIFACT_(?:API|BLOB)_FAILED_(?:408|425|429|5\d\d)_CURL_0(?:_|:|$)/',$message)) return true;
         if(str_starts_with($message,'ARTIFACT_BLOB_INCOMPLETE_')) return true;
         return false;
