@@ -7,6 +7,10 @@ use RuntimeException;
 
 final class GitHubClient
 {
+    private const ARTIFACT_CONNECT_TIMEOUT = 30;
+    private const ARTIFACT_TRANSFER_TIMEOUT = 600;
+    private const ARTIFACT_ATTEMPTS = 3;
+
     private string $token;
 
     public function __construct(string $token)
@@ -70,9 +74,19 @@ final class GitHubClient
         }
     }
 
-    public function downloadArtifact(string $fullName, int $artifactId, string $target): void
-    {
-        $this->download('/repos/' . $this->repoPath($fullName) . '/actions/artifacts/' . $artifactId . '/zip', $target);
+    public function downloadArtifact(
+        string $fullName,
+        int $artifactId,
+        string $target,
+        string $expectedDigest = '',
+        ?int $expectedBytes = null
+    ): void {
+        $this->download(
+            '/repos/' . $this->repoPath($fullName) . '/actions/artifacts/' . $artifactId . '/zip',
+            $target,
+            strtolower(trim($expectedDigest)),
+            $expectedBytes
+        );
     }
 
     private function contextualize(string $stage, RuntimeException $e): RuntimeException
@@ -126,20 +140,62 @@ final class GitHubClient
         return (string)$body;
     }
 
-    private function download(string $path, string $target): void
+    private function download(string $path, string $target, string $expectedDigest, ?int $expectedBytes): void
+    {
+        @unlink($target);
+        $lastError=null;
+
+        for($attempt=1;$attempt<=self::ARTIFACT_ATTEMPTS;$attempt++){
+            $part=$target.'.part-'.$attempt.'-'.bin2hex(random_bytes(4));
+            try{
+                $this->downloadOnce($path,$part);
+                $this->assertZipFile($part);
+
+                $actualBytes=filesize($part);
+                if($actualBytes===false || $actualBytes<1) throw new RuntimeException('ARTIFACT_EMPTY');
+                if($expectedBytes!==null && $expectedBytes>0 && $actualBytes!==$expectedBytes){
+                    throw new RuntimeException('ARTIFACT_SIZE_MISMATCH_EXPECTED_'.$expectedBytes.'_RECEIVED_'.$actualBytes);
+                }
+
+                if(str_starts_with($expectedDigest,'sha256:')){
+                    $expected=substr($expectedDigest,7);
+                    $actual=strtolower((string)hash_file('sha256',$part));
+                    if(!preg_match('/^[a-f0-9]{64}$/',$expected) || !hash_equals($expected,$actual)){
+                        throw new RuntimeException('ARTIFACT_DIGEST_MISMATCH');
+                    }
+                }
+
+                if(!@rename($part,$target)){
+                    throw new RuntimeException('ARTIFACT_PROMOTE_FAILED');
+                }
+                return;
+            }catch(RuntimeException $e){
+                @unlink($part);
+                $lastError=$e;
+                if($attempt>=self::ARTIFACT_ATTEMPTS || !$this->isRetryableArtifactError($e->getMessage())){
+                    throw $e;
+                }
+                usleep(250000 * (2 ** ($attempt-1)));
+            }
+        }
+
+        throw $lastError ?? new RuntimeException('ARTIFACT_DOWNLOAD_FAILED');
+    }
+
+    private function downloadOnce(string $path, string $part): void
     {
         $apiUrl = 'https://api.github.com' . $path;
         $location = null;
 
-        $fp = fopen($target, 'wb');
+        $fp = fopen($part, 'wb');
         if (!$fp) throw new RuntimeException('ARTIFACT_TARGET_OPEN_FAILED');
 
         $ch = curl_init($apiUrl);
         curl_setopt_array($ch, [
             CURLOPT_FILE => $fp,
             CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT => 45,
+            CURLOPT_CONNECTTIMEOUT => self::ARTIFACT_CONNECT_TIMEOUT,
+            CURLOPT_TIMEOUT => self::ARTIFACT_TRANSFER_TIMEOUT,
             CURLOPT_HTTPHEADER => [
                 'Accept: application/vnd.github+json',
                 'Authorization: Bearer ' . $this->token,
@@ -159,21 +215,20 @@ final class GitHubClient
         $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $errno = curl_errno($ch);
         $err = curl_error($ch);
+        $expected = $this->curlContentLength($ch);
+        $received = $this->curlDownloadedBytes($ch, $part);
         curl_close($ch);
         fclose($fp);
 
         if ($ok === false) {
-            @unlink($target);
-            throw new RuntimeException('ARTIFACT_API_FAILED_' . $status . '_CURL_' . $errno . ($err ? ':' . $err : ''));
+            throw new RuntimeException($this->artifactTransferError('API',$status,$errno,$expected,$received,$err));
         }
 
         if ($status >= 200 && $status < 300) {
-            $this->assertZipFile($target);
             return;
         }
 
         if (!in_array($status, [301,302,303,307,308], true) || !$location) {
-            @unlink($target);
             throw new RuntimeException('ARTIFACT_REDIRECT_FAILED_' . $status);
         }
 
@@ -185,13 +240,12 @@ final class GitHubClient
             || isset($parts['user'])
             || isset($parts['pass'])
         ) {
-            @unlink($target);
             throw new RuntimeException('ARTIFACT_REDIRECT_INVALID');
         }
 
-        // GitHub returns a short-lived signed blob URL. Use a fresh request and
-        // deliberately do not forward the GitHub Authorization header.
-        $fp = fopen($target, 'wb');
+        // GitHub returns a short-lived signed blob URL. Reopen the partial file
+        // from byte zero and deliberately do not forward GitHub Authorization.
+        $fp = fopen($part, 'wb');
         if (!$fp) throw new RuntimeException('ARTIFACT_TARGET_OPEN_FAILED');
 
         $ch = curl_init($location);
@@ -199,8 +253,8 @@ final class GitHubClient
             CURLOPT_FILE => $fp,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 3,
-            CURLOPT_CONNECTTIMEOUT => 15,
-            CURLOPT_TIMEOUT => 180,
+            CURLOPT_CONNECTTIMEOUT => self::ARTIFACT_CONNECT_TIMEOUT,
+            CURLOPT_TIMEOUT => self::ARTIFACT_TRANSFER_TIMEOUT,
             CURLOPT_HTTPHEADER => [
                 'Accept: application/octet-stream',
                 'User-Agent: DigiOps/1.0',
@@ -211,15 +265,54 @@ final class GitHubClient
         $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $errno = curl_errno($ch);
         $err = curl_error($ch);
+        $expected = $this->curlContentLength($ch);
+        $received = $this->curlDownloadedBytes($ch, $part);
         curl_close($ch);
         fclose($fp);
 
         if ($ok === false || $status < 200 || $status >= 300) {
-            @unlink($target);
-            throw new RuntimeException('ARTIFACT_BLOB_FAILED_' . $status . '_CURL_' . $errno . ($err ? ':' . $err : ''));
+            throw new RuntimeException($this->artifactTransferError('BLOB',$status,$errno,$expected,$received,$err));
         }
 
-        $this->assertZipFile($target);
+        if($expected>0 && $received!==$expected){
+            throw new RuntimeException('ARTIFACT_BLOB_INCOMPLETE_EXPECTED_'.$expected.'_RECEIVED_'.$received);
+        }
+    }
+
+    private function isRetryableArtifactError(string $message): bool
+    {
+        if(preg_match('/^ARTIFACT_(?:API|BLOB)_FAILED_(?:0|408|425|429|5\d\d)_CURL_(?:6|7|18|28|35|52|55|56|92)(?:_|:|$)/',$message)) return true;
+        if(preg_match('/^ARTIFACT_(?:API|BLOB)_FAILED_(?:408|425|429|5\d\d)_CURL_0(?:_|:|$)/',$message)) return true;
+        if(str_starts_with($message,'ARTIFACT_BLOB_INCOMPLETE_')) return true;
+        return false;
+    }
+
+    private function artifactTransferError(string $stage, int $status, int $errno, int $expected, int $received, string $error): string
+    {
+        $message='ARTIFACT_'.$stage.'_FAILED_'.$status.'_CURL_'.$errno.'_EXPECTED_'.$expected.'_RECEIVED_'.$received;
+        if($error!=='')$message.=':'.preg_replace('/\s+/',' ',trim($error));
+        return $message;
+    }
+
+    private function curlContentLength($ch): int
+    {
+        if(defined('CURLINFO_CONTENT_LENGTH_DOWNLOAD_T')){
+            $value=curl_getinfo($ch,CURLINFO_CONTENT_LENGTH_DOWNLOAD_T);
+            if(is_int($value) && $value>=0) return $value;
+        }
+        $value=curl_getinfo($ch,CURLINFO_CONTENT_LENGTH_DOWNLOAD);
+        return is_numeric($value) && (float)$value>=0 ? (int)$value : -1;
+    }
+
+    private function curlDownloadedBytes($ch, string $part): int
+    {
+        if(defined('CURLINFO_SIZE_DOWNLOAD_T')){
+            $value=curl_getinfo($ch,CURLINFO_SIZE_DOWNLOAD_T);
+            if(is_int($value) && $value>=0) return $value;
+        }
+        clearstatcache(true,$part);
+        $size=is_file($part)?filesize($part):false;
+        return $size===false ? 0 : (int)$size;
     }
 
     private function assertZipFile(string $target): void
@@ -242,5 +335,4 @@ final class GitHubClient
             throw new RuntimeException('ARTIFACT_NOT_ZIP');
         }
     }
-
 }
