@@ -13,12 +13,15 @@ const required=[
   "window.addEventListener('popstate'",
   "apps/'+encodeURIComponent(id)",
   "if(page==='deployments')return 'deployments'",
+  "if(page==='verification')return 'verification'",
   "if(page==='health-center')return 'health'",
   "if(page==='guide')return 'guide'",
   "data-digiops-page=\"deployments\"",
+  "data-digiops-page=\"verification\"",
   "data-digiops-page=\"health\"",
   "data-digiops-page=\"guide\"",
   "Deployment Center",
+  "Verification Center",
   "Health & Readiness",
   "Help & Guide",
   "help-drawer"
@@ -27,7 +30,7 @@ const required=[
 const corpus=vite+'\n'+htaccess+'\n'+main
 const missing=required.filter(token=>!corpus.includes(token))
 if(missing.length){
-  console.error('Pretty URL certification failed. Missing:',missing.join(', '))
+  console.error('Pretty URL routing check failed. Missing:',missing.join(', '))
   process.exit(1)
 }
 
@@ -39,4 +42,4 @@ if(forbiddenApi.length){
   process.exit(1)
 }
 
-console.log('Pretty URL routing certification: PASS')
+console.log('Pretty URL routing check: PASS')
