@@ -92,6 +92,7 @@ final class ReleaseManager
             $this->extractSafe($zipFile, $stage);
             [$publicPayload, $privatePayload] = $this->detectPayloads($stage);
             $this->validatePayload($publicPayload);
+            $this->validatePrivatePayload($slug,$privatePayload);
 
             $this->writeDeploymentState($slug,'running','snapshotting',52,$stateMeta+['release'=>$releaseId]);
             if (is_dir($publicTarget) && $this->hasEntries($publicTarget)) {
@@ -198,6 +199,7 @@ final class ReleaseManager
         $publicSource = is_dir($releaseRoot . '/public') ? $releaseRoot . '/public' : $releaseRoot . '/payload';
         $privateSource = is_dir($releaseRoot . '/private') ? $releaseRoot . '/private' : null;
         if (!is_dir($publicSource)) throw new RuntimeException('RELEASE_NOT_FOUND');
+        $this->validatePrivatePayload($slug,$privateSource);
 
         $publicTarget = DIGIOPS_APP_HOME . '/' . $project['publicPath'];
         $privateTarget = DIGIOPS_APP_HOME . '/' . $project['privatePath'];
@@ -303,6 +305,15 @@ final class ReleaseManager
         }
         if (is_dir($root . '/dist')) return [$root . '/dist', null];
         return [$root, null];
+    }
+
+    private function validatePrivatePayload(string $slug, ?string $payload): void
+    {
+        if($payload===null || $slug!=='digiops') return;
+        $allowed=['app','agent','build'];
+        foreach(array_diff(scandir($payload) ?: [], ['.','..']) as $name){
+            if(!in_array($name,$allowed,true)) throw new RuntimeException('DIGIOPS_PRIVATE_PAYLOAD_UNMANAGED_'.$name);
+        }
     }
 
     private function validatePayload(string $payload): void
