@@ -6,6 +6,7 @@ require_once __DIR__ . '/_bootstrap.php';
 header('Cache-Control: no-store, private');
 
 use DigiOps\Audit\AuditLog;
+use DigiOps\Deploy\DeploymentJobRepository;
 use DigiOps\Deploy\ReleaseManager;
 use DigiOps\Registry\ProjectRegistry;
 use DigiOps\Security\Session;
@@ -29,14 +30,31 @@ if($requestId!=='' && !preg_match('/^[a-f0-9]{32}$/',$requestId)) JsonResponse::
 if($projectId==='') JsonResponse::send(['error'=>'PROJECT_REQUIRED'],400);
 if(!preg_match('/^[a-f0-9]{40}$/',$commit)) JsonResponse::send(['error'=>'COMMIT_REQUIRED'],400);
 
+$jobs=new DeploymentJobRepository();
+$reply=static function(array $payload,int $http=200) use ($jobs,$requestId): never {
+    if($requestId!=='' && isset($payload['state'])){
+        $state=(string)$payload['state'];
+        $patch=[
+            'state'=>$state,
+            'phase'=>(string)($payload['phase']??($state==='deployed'?'complete':$state)),
+            'progress'=>(int)($payload['progress']??($state==='deployed'||$state==='failed'?100:0)),
+            'release'=>(string)($payload['release']??''),
+            'error'=>(string)($payload['error']??''),
+        ];
+        if(in_array($state,['deployed','failed'],true))$patch['completedAt']=date(DATE_ATOM);
+        try{$jobs->patch($requestId,$patch);}catch(Throwable){}
+    }
+    JsonResponse::send($payload,$http);
+};
+
 try {
     $registry=new ProjectRegistry();
     $project=$registry->find($projectId);
-    if(!$project) JsonResponse::send(['error'=>'PROJECT_NOT_FOUND'],404);
+    if(!$project) $reply(['error'=>'PROJECT_NOT_FOUND'],404);
 
     $registryCommit=strtolower(trim((string)($project['commit']??'')));
     if($requestId==='' && $registryCommit===$commit){
-        JsonResponse::send([
+        $reply([
             'ok'=>true,'state'=>'deployed','reconciled'=>false,
             'commit'=>$commit,'requestId'=>$requestId,
             'release'=>(string)($project['release']??''),
@@ -54,7 +72,7 @@ try {
         if($deploymentMatches){
             $state=strtolower(trim((string)($deployment['state']??'')));
             if($state==='deployed'){
-                JsonResponse::send([
+                $reply([
                     'ok'=>true,'state'=>'deployed','reconciled'=>true,
                     'commit'=>$commit,'requestId'=>$requestId,
                     'release'=>(string)($deployment['release']??''),
@@ -62,7 +80,7 @@ try {
                 ]);
             }
             if($state==='failed'){
-                JsonResponse::send([
+                $reply([
                     'ok'=>false,'state'=>'failed','reconciled'=>false,
                     'commit'=>$commit,'requestId'=>$requestId,
                     'phase'=>(string)($deployment['phase']??'failed'),
@@ -73,7 +91,7 @@ try {
                 ]);
             }
             if($state==='running'){
-                JsonResponse::send([
+                $reply([
                     'ok'=>true,'state'=>'running','reconciled'=>false,
                     'commit'=>$commit,'requestId'=>$requestId,
                     'phase'=>(string)($deployment['phase']??'publishing'),
@@ -85,7 +103,7 @@ try {
                 ]);
             }
         }
-        JsonResponse::send([
+        $reply([
             'ok'=>true,'state'=>'pending','reconciled'=>false,
             'commit'=>$commit,'source'=>'local-progress-wait',
         ]);
@@ -112,7 +130,7 @@ try {
                 'project'=>$projectId,'target'=>$target['id']??'',
                 'release'=>$releaseId,'commit'=>$commit,'source'=>'agent-current',
             ],$user);
-            JsonResponse::send([
+            $reply([
                 'ok'=>true,'state'=>'deployed','reconciled'=>true,
                 'commit'=>$commit,'release'=>$releaseId,'source'=>'agent-current',
             ]);
@@ -128,7 +146,7 @@ try {
         if($deploymentMatches){
             $remoteState=strtolower(trim((string)($deployment['state']??'')));
             if(in_array($remoteState,['uploading','running'],true)){
-                JsonResponse::send([
+                $reply([
                     'ok'=>true,'state'=>'running','reconciled'=>false,
                     'commit'=>$commit,'requestId'=>$requestId,
                     'phase'=>(string)($deployment['phase']??'publishing'),
@@ -140,7 +158,7 @@ try {
                 ]);
             }
             if($remoteState==='failed'){
-                JsonResponse::send([
+                $reply([
                     'ok'=>false,'state'=>'failed','reconciled'=>false,
                     'commit'=>$commit,'requestId'=>$requestId,
                     'phase'=>(string)($deployment['phase']??'failed'),
@@ -153,7 +171,7 @@ try {
         }
     } catch(Throwable $statusError) {
         if($requestId!==''){
-            JsonResponse::send([
+            $reply([
                 'ok'=>true,'state'=>'unavailable','reconciled'=>false,
                 'commit'=>$commit,'requestId'=>$requestId,
                 'error'=>(string)$statusError->getMessage(),
@@ -166,7 +184,7 @@ try {
     }
 
     if($agentStatusSupported){
-        JsonResponse::send([
+        $reply([
             'ok'=>true,'state'=>'pending','reconciled'=>false,
             'commit'=>$commit,'source'=>'agent-current-wait',
         ]);
@@ -184,7 +202,7 @@ try {
     }
 
     if(!$matched){
-        JsonResponse::send([
+        $reply([
             'ok'=>true,'state'=>'pending','reconciled'=>false,
             'commit'=>$commit,'source'=>'remote-release-list',
         ]);
@@ -202,7 +220,7 @@ try {
     }
 
     if(!$oldEnough || !$healthy){
-        JsonResponse::send([
+        $reply([
             'ok'=>true,'state'=>'pending','reconciled'=>false,
             'commit'=>$commit,'source'=>'release-evidence-wait',
         ]);
@@ -219,10 +237,10 @@ try {
         'release'=>$releaseId,'commit'=>$commit,'source'=>'release-health-compat',
     ],$user);
 
-    JsonResponse::send([
+    $reply([
         'ok'=>true,'state'=>'deployed','reconciled'=>true,
         'commit'=>$commit,'release'=>$releaseId,'source'=>'release-health-compat',
     ]);
 } catch(Throwable $e){
-    JsonResponse::send(['error'=>$e->getMessage()],400);
+    $reply(['error'=>$e->getMessage()],400);
 }
