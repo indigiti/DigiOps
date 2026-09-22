@@ -13,6 +13,7 @@ const HELP_TOPICS={
   dashboard:{title:'Command Center',intro:'A last-known operational summary. Opening this page does not fan out to GitHub or remote targets.',items:['Attention shows applications that need review.','Updates are known deployable builds detected during an explicit update check.','Pending means health has not been verified yet.','Use Deployment Center for release activity and Health & Readiness for fleet condition.']},
   projects:{title:'Applications',intro:'Each application maps one repository to isolated public/private deployment paths.',items:['Open an application to inspect its source, deployment, releases, files and health.','Search works across application name, repository, URL and branch.','Application cards show last-known state only; expensive remote checks stay on demand.']},
   deployments:{title:'Deployment Center',intro:'A fleet-level view of recent releases and applications with known deployable updates.',items:['Review a candidate before deployment.','DigiOps snapshots the current public release before publishing.','If a browser response is interrupted, the authoritative server-side deployment state is followed instead of starting a duplicate deployment.']},
+  verification:{title:'Verification Center',intro:'Durable step-by-step evidence for every deployment attempt, loaded from DigiOps local state without GitHub fan-out.',items:['Each checkpoint records its phase, status, timestamp and evidence source.','Failures stay attached to the exact checkpoint that failed.','Request ID, workflow run, artifact, commit and target are shown together for traceability.','Health verification is the final checkpoint after authoritative deployment confirmation.']},
   health:{title:'Health & Readiness',intro:'Fleet health is deliberately last-known until you explicitly check an application.',items:['Healthy means the most recent probe passed.','Attention means the most recent probe needs review.','Pending means no recent authoritative health result is stored.','Open an application health tab to run a fresh probe.']},
   targets:{title:'Deployment Targets',intro:'Targets are local or remote execution nodes used by registered applications.',items:['Remote targets use a signed DigiOps agent.','Test a target before assigning important applications.','Agent version and capabilities determine whether safe deployment confirmation is available.']},
   settings:{title:'Connections & Runtime',intro:'External connections and infrastructure policies live here.',items:['GitHub access is used only for explicit repository/workflow actions.','Redis credentials are encrypted in private storage.','DigiOps should bypass Varnish because it is an authenticated control plane.','Runtime identity confirms the exact build running on the server.']},
@@ -62,7 +63,7 @@ function app(){
     projects:[], targets:[], selectedId:null, releases:[], githubInfo:null, fileListing:null, health:null, audit:[],
     detailCache:{github:{},releases:{},health:{},files:{}}, requestPool:{},
     modal:null, busy:false, notice:'', error:'', operationTimer:null,
-    deploymentWatches:[], deploymentJobs:[], deploymentWatchTimer:null, deploymentWatchBusy:false,
+    deploymentWatches:[], deploymentJobs:[], verificationJobId:null, deploymentWatchTimer:null, deploymentWatchBusy:false,
     operation:{active:false,type:'',title:'',message:'',percent:0,status:'idle',estimated:false},
     login:{username:'',password:'',totp:''},
     install:{name:'Administrator',username:'admin',password:'',confirm:'',totpSecret:''},
@@ -171,11 +172,11 @@ function app(){
       }
     },
     get pageTitle(){
-      const titles={dashboard:'Command Center',projects:'Applications',deployments:'Deployment Center','health-center':'Health & Readiness',targets:'Deployment Targets',settings:'Connections & Runtime',audit:'Audit & Governance',guide:'Help & Guide',project:this.selectedName||'Application'}
+      const titles={dashboard:'Command Center',projects:'Applications',deployments:'Deployment Center',verification:'Verification Center','health-center':'Health & Readiness',targets:'Deployment Targets',settings:'Connections & Runtime',audit:'Audit & Governance',guide:'Help & Guide',project:this.selectedName||'Application'}
       return titles[this.page]||'DigiOps'
     },
     get pageEyebrow(){
-      const labels={dashboard:'Operate',projects:'Workspace',deployments:'Operate','health-center':'Observe',targets:'Infrastructure',settings:'System',audit:'Governance',guide:'Learn',project:'Application'}
+      const labels={dashboard:'Operate',projects:'Workspace',deployments:'Operate',verification:'Observe','health-center':'Observe',targets:'Infrastructure',settings:'System',audit:'Governance',guide:'Learn',project:'Application'}
       return labels[this.page]||'Control Plane'
     },
     get commandHeadline(){
@@ -214,6 +215,33 @@ function app(){
       }).sort((a,b)=>b.apps-a.apps)
     },
     get recentDeploymentJobs(){return this.deploymentJobs.slice(0,12)},
+    get verificationJobs(){return this.deploymentJobs.slice(0,30)},
+    get selectedVerificationJob(){
+      if(!this.verificationJobs.length)return null
+      return this.verificationJobs.find(j=>j.requestId===this.verificationJobId)||this.verificationJobs[0]
+    },
+    get verificationStats(){
+      const jobs=this.verificationJobs
+      return {
+        total:jobs.length,
+        active:jobs.filter(j=>['queued','pending','running','unavailable','verifying'].includes(String(j.state||''))).length,
+        verified:jobs.filter(j=>(j.health&&j.health.ok===true)||j.phase==='health-verified').length,
+        attention:jobs.filter(j=>j.phase==='health-attention'||j.state==='attention'||j.state==='unavailable').length,
+        failed:jobs.filter(j=>j.state==='failed').length,
+        completed:jobs.filter(j=>j.state==='deployed').length
+      }
+    },
+    get latestVerificationJob(){return this.verificationJobs.length?this.verificationJobs[0]:null},
+    get latestVerificationSummary(){
+      const j=this.latestVerificationJob
+      if(!j)return 'No deployment verification recorded yet.'
+      const name=j.projectName||j.project
+      if(j.state==='failed')return name+' failed at '+this.deploymentJobPhase(j)+' · '+(j.error||'DEPLOY_FAILED')
+      if(j.phase==='health-attention')return name+' deployed but health needs attention.'
+      if((j.health&&j.health.ok===true)||j.phase==='health-verified')return name+' deployment and health are verified.'
+      if(['queued','pending','running','unavailable','verifying'].includes(String(j.state||'')))return name+' verification is active at '+this.deploymentJobPhase(j)+'.'
+      return name+' · '+String(j.state||'unknown')+' · '+this.deploymentJobPhase(j)
+    },
     get recentDeployments(){
       return this.projects
         .filter(p=>p.lastDeploy&&p.lastDeploy!=='Never')
@@ -233,6 +261,14 @@ function app(){
     get activeDeploymentWatches(){return this.deploymentWatches.filter(w=>['queued','pending','running','unavailable'].includes(w.status))},
     get selectedDeploymentWatch(){return this.selected?this.activeDeploymentWatches.find(w=>w.projectId===this.selected.id)||null:null},
     get backgroundDeploymentCount(){return this.activeDeploymentWatches.length},
+    get latestWorkflow(){
+      return this.githubInfo&&Array.isArray(this.githubInfo.runs)&&this.githubInfo.runs.length?this.githubInfo.runs[0]:null
+    },
+    get latestWorkflowNumber(){return this.latestWorkflow&&this.latestWorkflow.number?'#'+this.latestWorkflow.number:'—'},
+    get latestWorkflowCommitShort(){return this.latestWorkflow&&this.latestWorkflow.sha?String(this.latestWorkflow.sha).slice(0,12):'—'},
+    get latestWorkflowTime(){return this.latestWorkflow&&this.latestWorkflow.updatedAt?this.formatDate(this.latestWorkflow.updatedAt):'—'},
+    get sourceCommitsAhead(){return this.candidate&&Number.isInteger(this.candidate.sourceCommitsAhead)?this.candidate.sourceCommitsAhead:'—'},
+    get deployableCommitsAhead(){return this.candidate&&Number.isInteger(this.candidate.deployableCommitsAhead)?this.candidate.deployableCommitsAhead:'—'},
     get userName(){return this.user && this.user.name ? this.user.name : ''},
     get userRole(){return this.user && this.user.role ? this.user.role : ''},
     get selectedName(){return this.selected ? this.selected.name : ''},
@@ -335,6 +371,39 @@ function app(){
       if(!job)return '—'
       const run=job.runNumber?('#'+job.runNumber):(job.runId?('run '+job.runId):'build')
       return run+' · artifact '+(job.artifactId||'—')
+    },
+    deploymentJobCommit(job){return job&&job.commit?String(job.commit).slice(0,12):'—'},
+    verificationSteps(job){
+      if(!job)return []
+      const rows=Array.isArray(job.verification)?job.verification.filter(v=>v&&typeof v==='object'):[]
+      if(rows.length)return rows.map((v,index)=>({...v,key:(v.phase||'step')+'-'+index}))
+      const phase=String(job.phase||job.state||'unknown')
+      const status=job.state==='failed'?'failed':job.phase==='health-attention'?'attention':job.state==='unavailable'?'unavailable':job.state==='deployed'?'passed':['queued','pending'].includes(job.state)?'waiting':'running'
+      return [{key:'legacy-0',phase,label:phase.replace(/[-_]+/g,' '),status,source:job.verificationSource||'legacy-job',error:job.error||'',startedAt:job.startedAt||job.createdAt||'',updatedAt:job.updatedAt||'',completedAt:job.completedAt||null}]
+    },
+    verificationTone(status){
+      if(status==='failed')return 'border-rose-200 bg-rose-50 text-rose-700'
+      if(status==='attention'||status==='unavailable')return 'border-amber-200 bg-amber-50 text-amber-800'
+      if(status==='passed')return 'border-emerald-200 bg-emerald-50 text-emerald-700'
+      if(status==='running')return 'border-blue-200 bg-blue-50 text-blue-700'
+      return 'border-slate-200 bg-slate-50 text-slate-600'
+    },
+    verificationErrorHint(job){
+      const code=String(job&&job.error||'')
+      if(!code)return ''
+      if(/DIGEST_MISMATCH/.test(code))return 'The downloaded artifact does not match the expected SHA-256 digest.'
+      if(/ZIP|ENTRYPOINT|PAYLOAD|SYMLINK|TRAVERSAL/.test(code))return 'The release package failed structural or payload validation.'
+      if(/TARGET_AGENT_UPGRADE_REQUIRED/.test(code))return 'The remote DigiOps agent is missing a required deployment capability.'
+      if(/TARGET_CONNECT|CURLE_|TIMEOUT|HTTP_50|INVALID_RESPONSE|NetworkError|Failed to fetch/i.test(code))return 'DigiOps could not obtain authoritative target confirmation. The target may still be completing the deployment.'
+      if(/PREFLIGHT/.test(code))return 'A preflight requirement failed before publication.'
+      if(/HEALTH_CHECK_FAILED/.test(code))return 'Deployment completed, but the post-deploy health probe did not pass.'
+      if(/DEPLOYMENT_LOCKED/.test(code))return 'Another deployment or rollback already owns this application deployment lock.'
+      return 'The exact server error is shown below. Use the checkpoint and evidence source to isolate the failing component.'
+    },
+    selectVerificationJob(requestId){this.verificationJobId=requestId;icons()},
+    async openVerificationJob(requestId){
+      this.verificationJobId=requestId
+      await this.navigateRoute(this.routeFor('verification'))
     },
     healthFreshness(p){
       if(!p||!p.healthCheckedAt)return 'Not verified'
@@ -551,6 +620,7 @@ function app(){
       if(page==='dashboard')return ''
       if(page==='projects')return 'apps'
       if(page==='deployments')return 'deployments'
+      if(page==='verification')return 'verification'
       if(page==='health-center')return 'health'
       if(page==='guide')return 'guide'
       if(page==='targets')return 'targets'
@@ -604,6 +674,7 @@ function app(){
         icons();return
       }
       if(parts[0]==='deployments'){this.page='deployments';this.selectedId=null;await this.syncDeploymentWatches();icons();return}
+      if(parts[0]==='verification'){this.page='verification';this.selectedId=null;await this.syncDeploymentWatches();if(!this.verificationJobId&&this.deploymentJobs.length)this.verificationJobId=this.deploymentJobs[0].requestId;icons();return}
       if(parts[0]==='health'){this.page='health-center';this.selectedId=null;icons();return}
       if(parts[0]==='guide'){this.page='guide';this.selectedId=null;icons();return}
       if(parts[0]==='targets'&&this.userRole==='admin'){this.page='targets';this.selectedId=null;await this.loadTargets();icons();return}
