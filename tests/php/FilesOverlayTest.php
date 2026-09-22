@@ -51,5 +51,38 @@ try{
     if(!str_starts_with($e->getMessage(),'OVERLAY_TYPE_CONFLICT_EXPECTED_DIRECTORY:conflict')) throw $e;
 }
 
+
+
+Files::ensureDir($source.'/go-engine/bin/releases/release-a/modules');
+Files::ensureDir($target.'/go-engine/bin/releases/release-a/modules');
+$immutableRel='go-engine/bin/releases/release-a/modules/storage-engine';
+$immutableSource=$source.'/'.$immutableRel;
+$immutableTarget=$target.'/'.$immutableRel;
+file_put_contents($immutableSource,'same-binary-bytes');
+file_put_contents($immutableTarget,'same-binary-bytes');
+@chmod($immutableTarget,0444);
+
+$immutablePlan=Files::beginOverlay($source,$target,$root.'/backup-immutable-identical');
+if(!in_array($immutableRel,(array)($immutablePlan['unchangedFiles']??[]),true)){
+    throw new RuntimeException('OVERLAY_IDENTICAL_IMMUTABLE_NOT_SKIPPED');
+}
+Files::applyOverlay($immutablePlan);
+if(file_get_contents($immutableTarget)!=='same-binary-bytes'){
+    throw new RuntimeException('OVERLAY_IDENTICAL_IMMUTABLE_CHANGED');
+}
+Files::commitOverlay($immutablePlan);
+
+@chmod($immutableTarget,0644);
+file_put_contents($immutableSource,'different-binary-bytes');
+try{
+    Files::beginOverlay($source,$target,$root.'/backup-immutable-collision');
+    throw new RuntimeException('OVERLAY_IMMUTABLE_COLLISION_NOT_DETECTED');
+}catch(RuntimeException $e){
+    if(!str_starts_with($e->getMessage(),'IMMUTABLE_RELEASE_COLLISION:'.$immutableRel)) throw $e;
+}
+if(file_get_contents($immutableTarget)!=='same-binary-bytes'){
+    throw new RuntimeException('OVERLAY_IMMUTABLE_COLLISION_MODIFIED_TARGET');
+}
+
 Files::removeTree($root);
 echo "FilesOverlayTest PASS\n";
