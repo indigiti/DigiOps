@@ -549,13 +549,13 @@ function app(){
       this.startOperation('deploy','Deploying '+this.selectedName,'Preparing verified deployment candidate…',6,true)
       this.runEstimatedStages([
         {percent:14,message:'Locking deployment target…'},
-        {percent:28,message:'Downloading the selected GitHub artifact…'},
-        {percent:44,message:'Validating ZIP paths, payload and entrypoint…'},
-        {percent:60,message:'Creating a pre-deploy snapshot…'},
-        {percent:74,message:'Publishing the public release…'},
-        {percent:84,message:'Overlaying private application code while preserving runtime data…'},
-        {percent:91,message:'Waiting for final publish confirmation…'}
-      ],1400)
+        {percent:24,message:'Downloading the selected GitHub artifact…'},
+        {percent:36,message:'Uploading verified artifact to target…'},
+        {percent:48,message:'Validating ZIP paths and entrypoint…'},
+        {percent:60,message:'Creating rollback snapshot…'},
+        {percent:72,message:'Staging release files…'},
+        {percent:82,message:'Publishing application files…'}
+      ],4000)
       const deployController=new AbortController()
       const deployResponseTimer=setTimeout(()=>deployController.abort(),45000)
       try{
@@ -577,27 +577,46 @@ function app(){
         this.completeOperation('Deployment complete and health check finished.')
       }catch(e){
         clearTimeout(deployResponseTimer)
-        // The browser should never wait indefinitely for one long deployment
-        // response. If the response exceeds the bounded window, switch to the
-        // authoritative deploy-status channel while the server continues.
         const aborted=e && e.name==='AbortError'
         const transportError=aborted?'DEPLOY_RESPONSE_TIMEOUT':e.message
         const ambiguous=aborted || /INVALID_RESPONSE|TARGET_CONNECT_FAILED|HTTP_50[234]|Failed to fetch|NetworkError/i.test(transportError)
         let reconciled=false
+        let remoteFailed=''
+        let lastState=''
+        let lastPhase=''
+        let lastProgress=0
         if(ambiguous && requestedCommit){
-          this.setOperation(94,'Deployment still running. Verifying server completion…')
+          this.stopOperationTimer()
+          this.operation.estimated=false
+          this.setOperation(84,'Deployment response interrupted. Following authoritative server state…')
           this.cacheDropProject(this.selected.id)
-          for(let attempt=1;attempt<=60 && !reconciled;attempt++){
+          for(let attempt=1;attempt<=120 && !reconciled && !remoteFailed;attempt++){
             try{
               const status=await api('./api/deploy-status.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id,commit:requestedCommit})})
+              lastState=status&&status.state?String(status.state):'pending'
+              lastPhase=status&&status.phase?String(status.phase):''
+              lastProgress=Number(status&&status.progress)||0
               if(status && status.state==='deployed'){
                 reconciled=true
                 break
               }
-            }catch(_){}
-            if(attempt<60){
-              this.setOperation(94,'Server publish in progress · verification '+attempt+'/60…')
-              await new Promise(resolve=>setTimeout(resolve,3000))
+              if(status && status.state==='failed'){
+                remoteFailed=status.error||'REMOTE_DEPLOY_FAILED'
+                break
+              }
+              if(status && status.state==='running'){
+                const phaseLabel=lastPhase?lastPhase.replace(/[-_]+/g,' '):'publishing'
+                const serverPct=Math.max(84,Math.min(96,lastProgress||84))
+                this.operation.percent=serverPct
+                this.operation.message='Server '+phaseLabel+' · '+(lastProgress||0)+'% · verification '+attempt+'/120'
+              }else{
+                this.operation.message='Waiting for authoritative publish marker · verification '+attempt+'/120'
+              }
+            }catch(_){
+              this.operation.message='Deployment status channel temporarily unavailable · verification '+attempt+'/120'
+            }
+            if(attempt<120 && !reconciled && !remoteFailed){
+              await new Promise(resolve=>setTimeout(resolve,5000))
             }
           }
           if(reconciled){
@@ -613,9 +632,21 @@ function app(){
             this.completeOperation('Deployment committed successfully; exact remote release verification passed.')
           }
         }
-        if(!reconciled){
-          this.error=transportError
-          this.failOperation(aborted?'Deployment confirmation timed out. Check server state before retrying.':'Deployment failed: '+transportError)
+        if(remoteFailed){
+          this.error=remoteFailed
+          this.failOperation('Deployment failed on target: '+remoteFailed)
+        }else if(!reconciled){
+          if(lastState==='running'){
+            this.error=''
+            this.stopOperationTimer()
+            this.operation.status='running'
+            this.operation.estimated=false
+            this.operation.message='Remote deployment is still running'+(lastPhase?' · '+lastPhase.replace(/[-_]+/g,' '):'')+'. Use Check update before retrying.'
+            this.notice='Deployment is still running on the server; no second deploy was started.'
+          }else{
+            this.error='DEPLOYMENT_CONFIRMATION_UNAVAILABLE'
+            this.failOperation('Deployment response was interrupted and the server did not expose final state. Check update before retrying.')
+          }
         }
       }finally{clearTimeout(deployResponseTimer);this.busy=false;icons()}
     },
