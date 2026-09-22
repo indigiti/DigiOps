@@ -48,6 +48,13 @@ const api=async(url,options={})=>{
   return data
 }
 
+const apiTimed=async(url,options={},timeoutMs=8000)=>{
+  const controller=new AbortController()
+  const timer=setTimeout(()=>controller.abort(),timeoutMs)
+  try{return await api(url,{...options,signal:controller.signal})}
+  finally{clearTimeout(timer)}
+}
+
 function app(){
   return {
     ready:false, installed:false, user:null, csrf:null, authMode:'login',
@@ -644,9 +651,11 @@ function app(){
           this.operation.estimated=false
           this.setOperation(84,'Deployment response interrupted. Following authoritative server state…')
           this.cacheDropProject(this.selected.id)
-          for(let attempt=1;attempt<=120 && !reconciled && !remoteFailed;attempt++){
+          const verificationStarted=Date.now()
+          const verificationWindowMs=420000
+          for(let attempt=1;attempt<=120 && Date.now()-verificationStarted<verificationWindowMs && !reconciled && !remoteFailed;attempt++){
             try{
-              const status=await api('./api/deploy-status.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id,commit:requestedCommit,requestId})})
+              const status=await apiTimed('./api/deploy-status.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id,commit:requestedCommit,requestId})},8000)
               lastState=status&&status.state?String(status.state):'pending'
               lastPhase=status&&status.phase?String(status.phase):''
               lastProgress=Number(status&&status.progress)||0
@@ -662,15 +671,18 @@ function app(){
                 const phaseLabel=lastPhase?lastPhase.replace(/[-_]+/g,' '):'publishing'
                 const serverPct=Math.max(84,Math.min(96,lastProgress||84))
                 this.operation.percent=serverPct
-                this.operation.message='Server '+phaseLabel+' · '+(lastProgress||0)+'% · verification '+attempt+'/120'
+                this.operation.message='Server '+phaseLabel+' · '+(lastProgress||0)+'% · confirmation check '+attempt
+              }else if(status && status.state==='unavailable'){
+                const statusError=status.error?String(status.error).split(':')[0]:'temporary transport error'
+                this.operation.message='Confirmation channel retrying · '+statusError+' · check '+attempt
               }else{
-                this.operation.message='Waiting for authoritative publish marker · verification '+attempt+'/120'
+                this.operation.message='Waiting for authoritative publish marker · confirmation check '+attempt
               }
             }catch(_){
-              this.operation.message='Deployment status channel temporarily unavailable · verification '+attempt+'/120'
+              this.operation.message='Confirmation channel retrying · bounded status timeout · check '+attempt
             }
-            if(attempt<120 && !reconciled && !remoteFailed){
-              await new Promise(resolve=>setTimeout(resolve,5000))
+            if(attempt<120 && Date.now()-verificationStarted<verificationWindowMs && !reconciled && !remoteFailed){
+              await new Promise(resolve=>setTimeout(resolve,3000))
             }
           }
           if(reconciled){
