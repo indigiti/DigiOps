@@ -23,6 +23,16 @@ final class Files
         return is_array($data) ? $data : $default;
     }
 
+    public static function readJsonStrict(string $file, array $default = []): array
+    {
+        if (!is_file($file)) return $default;
+        $raw=file_get_contents($file);
+        if($raw===false) throw new RuntimeException('JSON_STATE_READ_FAILED');
+        $data=json_decode($raw,true);
+        if(!is_array($data)) throw new RuntimeException('JSON_STATE_INVALID');
+        return $data;
+    }
+
     public static function withLock(string $lockFile, callable $callback): mixed
     {
         self::ensureDir(dirname($lockFile));
@@ -44,6 +54,17 @@ final class Files
     {
         return self::withLock($file . '.lock', static function() use ($file, $default, $mutator): array {
             $current = self::readJson($file, $default);
+            $next = $mutator($current);
+            if (!is_array($next)) throw new RuntimeException('JSON_MUTATOR_INVALID');
+            self::writeJson($file, $next);
+            return $next;
+        });
+    }
+
+    public static function mutateJsonStrict(string $file, array $default, callable $mutator): array
+    {
+        return self::withLock($file . '.lock', static function() use ($file, $default, $mutator): array {
+            $current = self::readJsonStrict($file, $default);
             $next = $mutator($current);
             if (!is_array($next)) throw new RuntimeException('JSON_MUTATOR_INVALID');
             self::writeJson($file, $next);
