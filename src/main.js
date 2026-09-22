@@ -1101,6 +1101,7 @@ document.querySelector('#app').innerHTML=`
           <button @click="go('dashboard')" class="side-link" :class="page==='dashboard'?'active':''"><i data-lucide="layout-dashboard"></i><span>Command Center</span></button>
           <button @click="go('projects')" class="side-link" :class="['projects','project'].includes(page)?'active':''"><i data-lucide="folder-git-2"></i><span>Applications</span><span class="nav-badge" x-text="projects.length"></span></button>
           <button @click="go('deployments')" class="side-link" :class="page==='deployments'?'active':''"><i data-lucide="rocket"></i><span>Deployment Center</span><span x-show="stats.updates" class="nav-badge nav-badge-warn" x-text="stats.updates"></span></button>
+          <button @click="go('verification')" class="side-link" :class="page==='verification'?'active':''"><i data-lucide="shield-check"></i><span>Verification</span><span x-show="verificationStats.active||verificationStats.failed" class="nav-badge" :class="verificationStats.failed?'nav-badge-danger':'nav-badge-warn'" x-text="verificationStats.failed||verificationStats.active"></span></button>
           <button @click="go('health-center')" class="side-link" :class="page==='health-center'?'active':''"><i data-lucide="heart-pulse"></i><span>Health & Readiness</span><span x-show="stats.attention" class="nav-badge nav-badge-danger" x-text="stats.attention"></span></button>
         </div>
 
@@ -1134,7 +1135,7 @@ document.querySelector('#app').innerHTML=`
         </div>
         <div class="ml-auto flex min-w-0 items-center gap-2">
           <label class="search-field hidden md:flex"><i data-lucide="search" class="h-4 w-4 text-slate-400"></i><input x-model="query" @keydown.enter="go('projects')" placeholder="Find an application…"></label>
-          <button x-show="backgroundDeploymentCount" @click="go('deployments')" class="hidden items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 sm:inline-flex"><i data-lucide="refresh-cw" class="h-3.5 w-3.5 animate-spin"></i><span x-text="backgroundDeploymentCount+' verifying'"></span></button>
+          <button x-show="backgroundDeploymentCount" @click="go('verification')" class="hidden items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 sm:inline-flex"><i data-lucide="refresh-cw" class="h-3.5 w-3.5 animate-spin"></i><span x-text="backgroundDeploymentCount+' verifying'"></span></button>
           <button @click="openHelp()" class="icon-btn" title="Explain this page"><i data-lucide="circle-help" class="h-4 w-4"></i></button>
           <span class="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 xl:inline-flex"><span class="status-dot" :class="runtimeInfo&&runtimeInfo.identityVerified?'bg-emerald-500':'bg-amber-500'"></span><span x-text="runtimeInfo&&runtimeInfo.identityVerified?'Verified build':'Build check needed'"></span></span>
         </div>
@@ -1148,7 +1149,7 @@ document.querySelector('#app').innerHTML=`
             <div class="deployment-watch-card">
               <span class="deployment-watch-icon"><i data-lucide="refresh-cw" class="h-4 w-4 animate-spin"></i></span>
               <div class="min-w-0 flex-1"><div class="flex flex-wrap items-center justify-between gap-2"><b class="truncate text-sm" x-text="w.projectName||w.projectId"></b><span class="text-xs font-semibold text-blue-700">Background verification</span></div><p class="mt-1 text-xs text-slate-500" x-text="deploymentWatchLabel(w)"></p></div>
-              <button @click="openProjectTab(w.projectId,'deploy')" class="btn py-1.5 text-xs">Open</button>
+              <button @click="openVerificationJob(w.requestId)" class="btn py-1.5 text-xs">Open</button>
             </div>
           </template>
         </div>
@@ -1171,9 +1172,11 @@ document.querySelector('#app').innerHTML=`
               <h1 class="mt-3 text-2xl font-bold text-white md:text-3xl" x-text="commandHeadline"></h1>
               <p class="mt-2 max-w-3xl text-sm leading-6 text-slate-300" x-text="commandSummary"></p>
             </div>
-            <div class="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4">
+            <div class="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-3">
               <button @click="go('projects')" class="hero-metric"><span>Apps</span><b x-text="stats.total"></b></button>
               <button @click="go('deployments')" class="hero-metric"><span>Updates</span><b x-text="stats.updates"></b></button>
+              <button @click="go('verification')" class="hero-metric"><span>Verifying</span><b x-text="verificationStats.active"></b></button>
+              <button @click="go('verification')" class="hero-metric"><span>Failed</span><b x-text="verificationStats.failed"></b></button>
               <button @click="go('health-center')" class="hero-metric"><span>Attention</span><b x-text="stats.attention"></b></button>
               <button @click="go('targets')" class="hero-metric" x-show="userRole==='admin'"><span>Targets</span><b x-text="stats.targets"></b></button>
             </div>
@@ -1181,13 +1184,15 @@ document.querySelector('#app').innerHTML=`
           <div class="quick-actions">
             <button @click="openCreate()" class="quick-action"><span class="quick-icon"><i data-lucide="plus"></i></span><span><b>Add application</b><small>Register a repository and deployment path.</small></span></button>
             <button @click="go('deployments')" class="quick-action"><span class="quick-icon"><i data-lucide="rocket"></i></span><span><b>Review deployments</b><small>See recent releases and deployable updates.</small></span></button>
+            <button @click="go('verification')" class="quick-action"><span class="quick-icon"><i data-lucide="shield-check"></i></span><span><b>Inspect verification</b><small>See each deployment checkpoint and exact failures.</small></span></button>
             <button @click="go('health-center')" class="quick-action"><span class="quick-icon"><i data-lucide="heart-pulse"></i></span><span><b>Check readiness</b><small>Review last-known application and target state.</small></span></button>
           </div>
           <div class="fleet-strip">
             <button @click="go('projects')" class="fleet-chip"><span>Applications</span><b x-text="stats.total"></b></button>
-            <button @click="go('deployments')" class="fleet-chip"><span>Active deploys</span><b x-text="backgroundDeploymentCount"></b></button>
-            <button @click="filter='healthy';go('projects')" class="fleet-chip"><span>Healthy</span><b class="text-emerald-700" x-text="stats.healthy"></b></button>
-            <button @click="filter='attention';go('projects')" class="fleet-chip"><span>Attention</span><b class="text-rose-700" x-text="stats.attention"></b></button>
+            <button @click="go('verification')" class="fleet-chip"><span>Verifying</span><b class="text-blue-700" x-text="verificationStats.active"></b></button>
+            <button @click="go('verification')" class="fleet-chip"><span>Health verified</span><b class="text-emerald-700" x-text="verificationStats.verified"></b></button>
+            <button @click="go('verification')" class="fleet-chip"><span>Deploy failed</span><b class="text-rose-700" x-text="verificationStats.failed"></b></button>
+            <button @click="go('health-center')" class="fleet-chip"><span>Health pending</span><b class="text-amber-700" x-text="stats.pending"></b></button>
             <button @click="filter='updates';go('projects')" class="fleet-chip"><span>Updates</span><b class="text-amber-700" x-text="stats.updates"></b></button>
           </div>
 
@@ -1205,9 +1210,9 @@ document.querySelector('#app').innerHTML=`
           </div>
 
           <div class="panel">
-            <div class="mb-4 flex items-start justify-between gap-3"><div><h2 class="font-bold">Deployment activity</h2><p class="muted mt-1">Server-owned deployment history. This survives browser reloads and device changes.</p></div><button @click="go('deployments')" class="btn">Deployment Center</button></div>
+            <div class="mb-4 flex items-start justify-between gap-3"><div><h2 class="font-bold">Verification activity</h2><p class="muted mt-1" x-text="latestVerificationSummary"></p></div><button @click="go('verification')" class="btn">Verification Center</button></div>
             <div x-show="recentDeploymentJobs.length===0" class="empty-state">No deployment jobs recorded yet.</div>
-            <template x-for="j in recentDeploymentJobs.slice(0,6)" :key="j.requestId"><button @click="openProjectTab(j.project,'deploy')" class="row w-full text-left"><span class="min-w-0"><b class="block truncate" x-text="j.projectName||j.project"></b><small class="block truncate text-slate-500"><span x-text="deploymentJobIdentity(j)"></span> · <span class="capitalize" x-text="deploymentJobPhase(j)"></span></small></span><span class="text-right"><span class="pill capitalize" x-text="j.state"></span><small class="mt-1 block text-slate-400" x-text="formatDate(j.updatedAt)"></small></span></button></template>
+            <template x-for="j in recentDeploymentJobs.slice(0,6)" :key="j.requestId"><button @click="openVerificationJob(j.requestId)" class="row w-full text-left"><span class="min-w-0"><b class="block truncate" x-text="j.projectName||j.project"></b><small class="block truncate text-slate-500"><span x-text="deploymentJobIdentity(j)"></span> · commit <code x-text="deploymentJobCommit(j)"></code> · <span class="capitalize" x-text="deploymentJobPhase(j)"></span></small><small x-show="j.error" class="mt-1 block truncate font-mono text-rose-600" x-text="j.error"></small></span><span class="text-right"><span class="pill capitalize" :class="verificationTone(j.state==='failed'?'failed':j.phase==='health-attention'?'attention':j.state==='deployed'?'passed':j.state==='unavailable'?'unavailable':'running')" x-text="j.state"></span><small class="mt-1 block text-slate-400" x-text="formatDate(j.updatedAt)"></small></span></button></template>
           </div>
         </section>
 
@@ -1222,7 +1227,27 @@ document.querySelector('#app').innerHTML=`
           <div class="mb-5 flex gap-6 overflow-x-auto border-b border-slate-200"><template x-for="t in ['overview','deploy','releases','files','health','settings']"><button @click="setTab(t)" class="tab capitalize" :class="projectTab===t?'active':''" x-text="t"></button></template></div>
           <div x-show="projectTab==='overview'" class="grid gap-5 xl:grid-cols-[1.4fr_.8fr]">
             <div class="panel"><h2 class="font-bold">Deployment configuration</h2><div class="row"><span><b class="block text-sm">Public URL</b><small class="text-slate-500">Browser route</small></span><code x-text="selectedUrl"></code></div><div class="row"><span><b class="block text-sm">Public folder</b><small class="text-slate-500">Release payload only</small></span><code class="text-xs" x-text="selectedPublicPath"></code></div><div class="row"><span><b class="block text-sm">Private folder</b><small class="text-slate-500">Runtime and metadata</small></span><code class="text-xs" x-text="selectedPrivatePath"></code></div><div class="row"><span><b class="block text-sm">Current commit</b></span><code x-text="selectedCommit"></code></div></div>
-            <div class="space-y-5"><div class="panel"><h2 class="font-bold">GitHub</h2><p class="muted mt-1" x-show="!githubInfo">Not checked yet. DigiOps does not query GitHub just by opening this application.</p><div x-show="githubConnected"><div class="mt-4 flex items-center gap-2 text-sm"><i data-lucide="check-circle-2" class="h-4 w-4 text-emerald-600"></i>Connected</div><div class="mt-4 text-sm"><span class="text-slate-500">Latest workflow</span><b class="mt-1 block" x-text="latestWorkflowStatus"></b></div></div><p x-show="githubError" class="mt-3 text-sm text-rose-600" x-text="githubErrorMessage"></p></div><div class="panel"><h2 class="font-bold">Update</h2><p class="muted mt-2" x-text="updateMessage"></p><div class="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">Performance mode: GitHub, health, releases and files are loaded on demand and cached per application for this session.</div></div></div>
+            <div class="space-y-5">
+              <div class="panel">
+                <div class="flex items-start justify-between gap-3"><div><h2 class="font-bold">Latest workflow</h2><p class="muted mt-1" x-show="!githubInfo">Not checked yet. Use Check update for fresh GitHub data.</p></div><span x-show="githubConnected" class="pill" :class="latestWorkflowStatus==='success'?'border-emerald-200 bg-emerald-50 text-emerald-700':'border-amber-200 bg-amber-50 text-amber-800'" x-text="latestWorkflowStatus"></span></div>
+                <div x-show="githubConnected" class="mt-4 grid grid-cols-2 gap-3 text-sm">
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Run</span><b class="mt-1 block text-lg" x-text="latestWorkflowNumber"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Commit</span><code class="mt-1 block font-bold" x-text="latestWorkflowCommitShort"></code></div>
+                  <div class="col-span-2 rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Updated</span><b class="mt-1 block" x-text="latestWorkflowTime"></b></div>
+                </div>
+                <p x-show="githubError" class="mt-3 text-sm text-rose-600" x-text="githubErrorMessage"></p>
+              </div>
+              <div class="panel">
+                <div class="flex items-start justify-between gap-3"><div><h2 class="font-bold">Update</h2><p class="muted mt-1" x-text="updateMessage"></p></div><span x-show="githubInfo" class="pill" :class="githubInfo&&githubInfo.updateAvailable?'border-amber-200 bg-amber-50 text-amber-800':'border-emerald-200 bg-emerald-50 text-emerald-700'" x-text="githubInfo&&githubInfo.updateAvailable?'1 deployable':'0 deployable'"></span></div>
+                <div x-show="githubInfo" class="mt-4 grid grid-cols-2 gap-3 text-sm">
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Artifact ID</span><b class="mt-1 block text-lg" x-text="candidateArtifactId"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Candidate</span><code class="mt-1 block font-bold" x-text="candidateCommitShort"></code></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Deployed</span><code class="mt-1 block font-bold" x-text="deployedCommitShort"></code></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Source ahead</span><b class="mt-1 block text-lg" x-text="sourceCommitsAhead"></b></div>
+                </div>
+                <div class="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">Performance mode: GitHub, health, releases and files remain on-demand and cached per application for this session.</div>
+              </div>
+            </div>
           </div>
           <div x-show="projectTab==='deploy'" class="space-y-5">
             <div x-show="githubNeedsConnection" class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"><b>GitHub connection required.</b> Connect a GitHub token before checking workflows or deploying artifacts. <button type="button" @click="go('settings')" class="ml-2 font-semibold underline">Open Connections</button></div>
