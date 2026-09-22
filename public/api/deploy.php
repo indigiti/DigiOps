@@ -45,6 +45,18 @@ try {
     $requestId=strtolower(trim((string)($data['requestId']??'')));
     if($requestId==='' || !preg_match('/^[a-f0-9]{32}$/',$requestId)) $requestId=bin2hex(random_bytes(16));
 
+    foreach($jobs->active($projectId) as $activeJob){
+        $activeRequestId=(string)($activeJob['requestId']??'');
+        if($activeRequestId===$requestId) continue;
+        JsonResponse::send([
+            'error'=>'DEPLOYMENT_ALREADY_ACTIVE',
+            'requestId'=>$activeRequestId,
+            'state'=>(string)($activeJob['state']??'running'),
+            'phase'=>(string)($activeJob['phase']??'running'),
+            'progress'=>(int)($activeJob['progress']??0),
+        ],409);
+    }
+
     $jobs->create([
         'requestId'=>$requestId,
         'project'=>$projectId,
