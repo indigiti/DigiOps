@@ -2,7 +2,7 @@
 declare(strict_types=1);
 require_once __DIR__ . '/_bootstrap.php';
 
-@set_time_limit(900);
+@set_time_limit(2100);
 @ignore_user_abort(true);
 header('Cache-Control: no-store, private');
 header('X-Accel-Buffering: no');
