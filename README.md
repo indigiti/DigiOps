@@ -1,6 +1,6 @@
 # DigiOps
 
-**DigiOps v1.7.1** is a web-first deployment and operations manager for multiple independent applications hosted beneath one Cloudways application/domain.
+**DigiOps v1.8.0** is a web-first deployment and operations manager for multiple independent applications hosted beneath one Cloudways application/domain.
 
 Example managed routes:
 
@@ -20,6 +20,7 @@ Example managed routes:
 - ZIP traversal/symlink checks
 - release snapshots, retention and rollback
 - deployment locks
+- durable step-by-step deployment verification with exact failure-stage evidence
 - restricted file browser
 - HTTP/runtime/storage health checks
 - hash-chained audit log
