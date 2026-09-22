@@ -61,11 +61,16 @@ final class RemoteDeploymentDriver
             ]);
         } catch (RuntimeException $e) {
             $message=$e->getMessage();
-            if (preg_match('/^(TARGET_CONNECT_FAILED_|TARGET_INVALID_RESPONSE_HTTP_50[234]|TARGET_HTTP_50[234])/', $message)) {
+            if (self::isUncertainCommitError($message)) {
                 throw new RuntimeException('REMOTE_COMMIT_UNCERTAIN_'.$message, 0, $e);
             }
             throw $e;
         }
+    }
+
+    private static function isUncertainCommitError(string $message): bool
+    {
+        return (bool)preg_match('/^(TARGET_CONNECT_FAILED_|TARGET_INVALID_RESPONSE_HTTP_50[234]|TARGET_HTTP_50[234])/', $message);
     }
 
     public function rollback(string $projectId,array $project,string $release): array
