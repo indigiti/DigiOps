@@ -79,6 +79,7 @@ function readJsonFile(string $file,array $default=[]): array { if(!is_file($file
 function writeJsonFile(string $file,array $data): void { ensureDir(dirname($file),0700);$tmp=$file.'.tmp-'.bin2hex(random_bytes(4));file_put_contents($tmp,json_encode($data,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES).PHP_EOL,LOCK_EX);@chmod($tmp,0600);if(!rename($tmp,$file))fail('JSON_PUBLISH_FAILED',500); }
 function extractSafe(string $zipFile,string $target): void { if(!class_exists('ZipArchive'))fail('ZIP_EXTENSION_UNAVAILABLE',500);$zip=new ZipArchive();if($zip->open($zipFile)!==true)fail('INVALID_ZIP');for($i=0;$i<$zip->numFiles;$i++){$name=str_replace('\\','/',$zip->getNameIndex($i));if($name===''||str_starts_with($name,'/')||str_contains($name,'../')||preg_match('#^[A-Za-z]:/#',$name)){$zip->close();fail('ZIP_PATH_TRAVERSAL');}}ensureDir($target);if(!$zip->extractTo($target)){$zip->close();fail('ZIP_EXTRACT_FAILED',500);} $zip->close(); }
 function payloads(string $stage): array { $root=$stage;$entries=array_values(array_filter(array_diff(scandir($stage)?:[],['.','..']),fn($x)=>$x!=='__MACOSX'));if(count($entries)===1&&is_dir($stage.'/'.$entries[0])){$candidate=$stage.'/'.$entries[0];if(is_dir($candidate.'/public')||is_dir($candidate.'/dist')||is_file($candidate.'/index.html')||is_file($candidate.'/index.php'))$root=$candidate;}if(is_dir($root.'/public'))return[$root.'/public',is_dir($root.'/private')?$root.'/private':null];if(is_dir($root.'/dist'))return[$root.'/dist',null];return[$root,null]; }
+function validatePrivatePayload(string $slug,?string $payload): void { if($payload===null||$slug!=='digiops')return;$allowed=['app','agent','build'];foreach(array_diff(scandir($payload)?:[],['.','..']) as $name)if(!in_array($name,$allowed,true))fail('DIGIOPS_PRIVATE_PAYLOAD_UNMANAGED_'.$name); }
 function projectRuntime(string $slug): string { return runtimeRoot().'/projects/'.$slug; }
 function deploymentStateFile(string $slug): string { return projectRuntime($slug).'/deployment.json'; }
 function deploymentState(string $slug): array { return readJsonFile(deploymentStateFile($slug),[]); }
@@ -112,7 +113,7 @@ function publishRelease(array $payload,string $zipFile): array {
     $stateMeta=['commit'=>(string)($payload['commit']??''),'artifactId'=>(string)($payload['artifactId']??''),'artifactDigest'=>(string)($payload['artifactDigest']??''),'downloadSha256'=>(string)($payload['downloadSha256']??''),'requestId'=>(string)($payload['requestId']??''),'uploadId'=>(string)($payload['uploadId']??'')];
     try{
         setDeploymentState($slug,'running','validating',38,$stateMeta);
-        $releaseId=date('Ymd-His').'-'.substr((string)($payload['commit']??bin2hex(random_bytes(4))),0,8);$stage=$runtime.'/staging/'.$releaseId;$releaseDir=$runtime.'/releases/'.$releaseId;ensureDir($stage);ensureDir(dirname($releaseDir));extractSafe($zipFile,$stage);[$publicPayload,$privatePayload]=payloads($stage);
+        $releaseId=date('Ymd-His').'-'.substr((string)($payload['commit']??bin2hex(random_bytes(4))),0,8);$stage=$runtime.'/staging/'.$releaseId;$releaseDir=$runtime.'/releases/'.$releaseId;ensureDir($stage);ensureDir(dirname($releaseDir));extractSafe($zipFile,$stage);[$publicPayload,$privatePayload]=payloads($stage);validatePrivatePayload($slug,$privatePayload);
         if(!is_file($publicPayload.'/index.html')&&!is_file($publicPayload.'/index.php'))fail('ENTRYPOINT_MISSING');if(dirSize($publicPayload)>1024*1024*1024)fail('PAYLOAD_TOO_LARGE');
         setDeploymentState($slug,'running','snapshotting',52,$stateMeta+['release'=>$releaseId]);
         if(is_dir($publicTarget)&&count(array_diff(scandir($publicTarget)?:[],['.','..']))){$backup='pre-'.$releaseId;copyDir($publicTarget,$runtime.'/releases/'.$backup.'/public');writeJsonFile($runtime.'/releases/'.$backup.'/meta.json',['id'=>$backup,'type'=>'snapshot','createdAt'=>date(DATE_ATOM),'source'=>'pre-deploy']);}
@@ -150,7 +151,7 @@ try{
         if(!is_dir($root.'/public'))fail('RELEASE_NOT_FOUND',404);
         $tmp=dirname($publicTarget).'/.'.$slug.'.rollback-'.bin2hex(random_bytes(4));
         copyDir($root.'/public',$tmp);
-        if(is_dir($root.'/private')){ensureDir($privateTarget);copyDir($root.'/private',$privateTarget);}
+        if(is_dir($root.'/private')){validatePrivatePayload($slug,$root.'/private');ensureDir($privateTarget);copyDir($root.'/private',$privateTarget);}
         atomicSwitchDir($tmp,$publicTarget,$slug);
         $meta=readJsonFile($root.'/meta.json',[]);
         writeJsonFile($runtime.'/current.json',['release'=>$release,'commit'=>(string)($meta['commit']??'—'),'lastDeploy'=>date(DATE_ATOM)]);
