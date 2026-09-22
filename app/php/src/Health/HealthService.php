@@ -12,14 +12,21 @@ final class HealthService
 {
     public function __construct(private ProjectRegistry $projects = new ProjectRegistry()) {}
 
-    public function probe(string $projectId): array
+    public function healthUrl(string $projectId): string
     {
         $project = $this->projects->find($projectId);
         if (!$project) throw new RuntimeException('PROJECT_NOT_FOUND');
         $slug = PathGuard::slug($projectId);
         $origin=$this->canonicalOrigin();
-        $path = '/' . $slug . '/' . ltrim((string)$project['healthPath'], '/');
-        $url = $origin . $path;
+        return $origin . '/' . $slug . '/' . ltrim((string)$project['healthPath'], '/');
+    }
+
+    public function probe(string $projectId): array
+    {
+        $project = $this->projects->find($projectId);
+        if (!$project) throw new RuntimeException('PROJECT_NOT_FOUND');
+        $slug = PathGuard::slug($projectId);
+        $url = $this->healthUrl($projectId);
 
         $http = ['ok'=>false,'status'=>null,'ms'=>null];
         if (function_exists('curl_init')) {
@@ -46,8 +53,13 @@ final class HealthService
         $runtime = ['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip'),'sodium'=>extension_loaded('sodium')];
         $ok = ($storage['exists'] || $project['status'] !== 'deployed') && $runtime['curl'] && $runtime['zip'] && ($project['status'] !== 'deployed' || $http['ok']);
         $checkedAt=date(DATE_ATOM);
-        $this->projects->patchRuntime($slug,['health'=>$ok?'healthy':'attention','healthCheckedAt'=>$checkedAt]);
-        return ['ok'=>$ok,'http'=>$http,'storage'=>$storage,'runtime'=>$runtime,'checkedAt'=>$checkedAt];
+        $result=['ok'=>$ok,'url'=>$url,'http'=>$http,'storage'=>$storage,'runtime'=>$runtime,'checkedAt'=>$checkedAt];
+        $this->projects->patchRuntime($slug,[
+            'health'=>$ok?'healthy':'attention',
+            'healthCheckedAt'=>$checkedAt,
+            'healthDetail'=>$result,
+        ]);
+        return $result;
     }
 
     private function canonicalOrigin(): string
