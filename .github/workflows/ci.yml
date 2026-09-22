@@ -16,12 +16,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
-      - uses: actions/upload-artifact@v4
-        with:
-          name: digiops-package-lock
-          path: package-lock.json
-          if-no-files-found: error
+      - run: npm ci
+      - run: npm audit --audit-level=high
       - run: npm run check:csp
       - run: node tools/check-pretty-routes.mjs
       - run: node tools/check-deploy-state-machine.mjs
@@ -85,5 +81,9 @@ jobs:
         run: |
           if find . -path './.git' -prune -o -type f \( -name '.env' -o -name '*.pem' -o -name '*.key' -o -name '*.csv' -o -name '*.xlsx' \) -print | grep -q .; then
             echo "Secret/data-like file found in repository"
+            exit 1
+          fi
+          if git grep -I -n -E -- '-----BEGIN (RSA |EC |OPENSSH |)?PRIVATE KEY-----|github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}' -- .; then
+            echo "Secret-like content found in repository"
             exit 1
           fi
