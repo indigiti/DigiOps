@@ -722,7 +722,7 @@ function app(){
         {percent:82,message:'Publishing application files…'}
       ],4000)
       const deployController=new AbortController()
-      const deployResponseTimer=setTimeout(()=>deployController.abort(),45000)
+      const deployResponseTimer=setTimeout(()=>deployController.abort(),15000)
       try{
         const d=await api('./api/deploy.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},signal:deployController.signal,body:JSON.stringify({
           project:this.selected.id,
