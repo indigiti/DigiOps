@@ -84,7 +84,9 @@ final class DeploymentJobRepository
         $project=$project!==null ? PathGuard::slug($project) : null;
         return array_values(array_filter($this->all(100), static function(array $row) use ($project): bool {
             if ($project!==null && ($row['project']??'')!==$project) return false;
-            return in_array((string)($row['state']??''),['queued','running','pending','unavailable','verifying'],true);
+            if(!in_array((string)($row['state']??''),['queued','running','pending','unavailable','verifying'],true)) return false;
+            $updated=strtotime((string)($row['updatedAt']??''));
+            return is_int($updated) && $updated >= time()-1800;
         }));
     }
 
