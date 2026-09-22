@@ -13,7 +13,7 @@ const checks=[
   ['Control plane requires authoritative modern-agent marker', status.includes('$agentStatusSupported') && status.includes("'source'=>'agent-current-wait'")],
   ['Control plane exposes remote running state', status.includes("'state'=>'running'") && status.includes("'source'=>'agent-progress'")],
   ['Agent survives client disconnects', agent.includes('@ignore_user_abort(true)') && agent.includes('@set_time_limit(600)')],
-  ['Agent persists deployment progress', agent.includes("deployment.json") && agent.includes("setDeploymentState") && agent.includes("'phase'=>'") === false],
+  ['Agent persists deployment progress', agent.includes("deployment.json") && agent.includes("setDeploymentState") && agent.includes("'snapshotting'") && agent.includes("'publishing'") && agent.includes("'switching'")],
   ['Agent status returns current and deployment records', agent.includes("ok(['current'=>$current,'deployment'=>$deployment])")],
   ['Agent blocks duplicate active deploys', agent.includes('DEPLOYMENT_ALREADY_RUNNING') && agent.includes('deploymentStateIsActive')],
   ['Remote commit timeout exceeds browser response window', client.includes("'deploy-commit'=>300")],
