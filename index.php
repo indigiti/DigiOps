@@ -14,8 +14,8 @@ declare(strict_types=1);
 session_name('DIGIOPSBOOTSTRAP');
 session_start();
 
-const DIGIOPS_CERTIFIED_ARTIFACT_ID = 10625891320;
-const DIGIOPS_CERTIFIED_SOURCE_SHA = 'dad462f2b3a34c2acfcbb54c2e52b9d802f080dc';
+const DIGIOPS_CERTIFIED_ARTIFACT_ID = 10679540881;
+const DIGIOPS_CERTIFIED_SOURCE_SHA = '542e38fd42a8a37169f13120ad9d0407036530de';
 
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
