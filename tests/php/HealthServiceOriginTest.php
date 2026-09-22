@@ -14,6 +14,7 @@ spl_autoload_register(static function(string $class): void {
     if(is_file($path))require_once $path;
 });
 
+use DigiOps\Health\HealthOrigin;
 use DigiOps\Health\HealthService;
 use DigiOps\Registry\ProjectRegistry;
 use DigiOps\Support\Files;
@@ -21,35 +22,43 @@ use DigiOps\Support\Files;
 $registry=new ProjectRegistry($root.'/private/registry/projects.json');
 $registry->upsert(['id'=>'qsyn','name'=>'QSYN','repo'=>'indigiti/syndi','branch'=>'main','healthPath'=>'/']);
 $service=new HealthService($registry);
-$method=new ReflectionMethod(HealthService::class,'canonicalOrigin');
-$method->setAccessible(true);
 
-putenv('DIGIOPS_CANONICAL_ORIGIN=https://stage.example.test/');
+putenv('DIGIOPS_CANONICAL_ORIGIN');
 putenv('APP_URL');
-if($method->invoke($service)!=='https://stage.example.test') throw new RuntimeException('CANONICAL_ORIGIN_NORMALIZATION_FAILED');
+Files::writeJson($root.'/private/config/infrastructure.json',[
+    'applicationOrigin'=>'https://stage.example.test',
+]);
+
+if(HealthOrigin::configured()!=='https://stage.example.test') throw new RuntimeException('STORED_HEALTH_ORIGIN_NOT_USED');
 if($service->healthUrl('qsyn')!=='https://stage.example.test/qsyn/') throw new RuntimeException('HEALTH_URL_RESOLUTION_FAILED');
 
+putenv('DIGIOPS_CANONICAL_ORIGIN=https://override.example.test/');
+if(HealthOrigin::configured()!=='https://override.example.test') throw new RuntimeException('ENV_HEALTH_ORIGIN_OVERRIDE_FAILED');
 putenv('DIGIOPS_CANONICAL_ORIGIN');
+
 $_SERVER['HTTP_HOST']='169.254.169.254';
+@unlink($root.'/private/config/infrastructure.json');
 try{
-    $method->invoke($service);
+    HealthOrigin::configured();
     throw new RuntimeException('HTTP_HOST_FALLBACK_ALLOWED');
-}catch(ReflectionException $e){
-    throw $e;
-}catch(Throwable $e){
-    $actual=$e instanceof ReflectionException ? $e : ($e->getPrevious() ?: $e);
-    if($actual->getMessage()!=='HEALTH_ORIGIN_NOT_CONFIGURED') throw $e;
+}catch(RuntimeException $e){
+    if($e->getMessage()!=='HEALTH_ORIGIN_NOT_CONFIGURED') throw $e;
 }
 
-putenv('DIGIOPS_CANONICAL_ORIGIN=https://user@example.test');
-try{
-    $method->invoke($service);
-    throw new RuntimeException('CREDENTIALLED_ORIGIN_ALLOWED');
-}catch(Throwable $e){
-    $actual=$e->getPrevious() ?: $e;
-    if($actual->getMessage()!=='HEALTH_ORIGIN_INVALID') throw $e;
+foreach([
+    'http://stage.example.test'=>'HEALTH_ORIGIN_HTTPS_REQUIRED',
+    'https://user@example.test'=>'HEALTH_ORIGIN_INVALID',
+    'https://stage.example.test/path'=>'HEALTH_ORIGIN_PATH_NOT_ALLOWED',
+] as $origin=>$expected){
+    try{
+        HealthOrigin::normalize($origin);
+        throw new RuntimeException('INVALID_HEALTH_ORIGIN_ACCEPTED');
+    }catch(RuntimeException $e){
+        if($e->getMessage()!==$expected) throw $e;
+    }
 }
 
-putenv('DIGIOPS_CANONICAL_ORIGIN');
+if(HealthOrigin::normalize('http://localhost:5173/')!=='http://localhost:5173') throw new RuntimeException('LOCAL_DEV_ORIGIN_REJECTED');
+
 Files::removeTree($root);
 echo "HealthServiceOriginTest PASS\n";
