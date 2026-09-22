@@ -37,7 +37,8 @@ final class HealthService
         $storage = ['exists'=>is_dir($public),'bytes'=>Files::directorySize($public),'writable'=>is_dir(dirname($public)) && is_writable(dirname($public))];
         $runtime = ['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip'),'sodium'=>extension_loaded('sodium')];
         $ok = ($storage['exists'] || $project['status'] !== 'deployed') && $runtime['curl'] && $runtime['zip'] && ($project['status'] !== 'deployed' || $http['ok']);
-        $this->projects->patchRuntime($slug,['health'=>$ok?'healthy':'attention']);
-        return ['ok'=>$ok,'http'=>$http,'storage'=>$storage,'runtime'=>$runtime,'checkedAt'=>date(DATE_ATOM)];
+        $checkedAt=date(DATE_ATOM);
+        $this->projects->patchRuntime($slug,['health'=>$ok?'healthy':'attention','healthCheckedAt'=>$checkedAt]);
+        return ['ok'=>$ok,'http'=>$http,'storage'=>$storage,'runtime'=>$runtime,'checkedAt'=>$checkedAt];
     }
 }
