@@ -71,7 +71,13 @@ final class ReleaseManager
         if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) throw new RuntimeException('DEPLOYMENT_LOCKED');
 
         try {
-            $stateMeta=['commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??''),'requestId'=>(string)($meta['requestId']??'')];
+            $stateMeta=[
+                'commit'=>(string)($meta['commit']??''),
+                'artifactId'=>(string)($meta['artifactId']??''),
+                'artifactDigest'=>(string)($meta['artifactDigest']??''),
+                'downloadSha256'=>(string)($meta['downloadSha256']??''),
+                'requestId'=>(string)($meta['requestId']??''),
+            ];
             $this->writeDeploymentState($slug,'running','validating',38,$stateMeta+['startedAt'=>date(DATE_ATOM)]);
             $releaseId = date('Ymd-His') . '-' . substr((string)($meta['commit'] ?? bin2hex(random_bytes(4))), 0, 8);
             $stage = $runtime . '/staging/' . $releaseId;
@@ -112,8 +118,9 @@ final class ReleaseManager
                 'commit'=>(string)($meta['commit'] ?? ''),
                 'artifactId'=>(string)($meta['artifactId'] ?? ''),
                 'requestId'=>(string)($meta['requestId'] ?? ''),
+                'artifactDigest'=>(string)($meta['artifactDigest'] ?? ''),
                 'createdAt'=>date(DATE_ATOM),
-                'sha256'=>hash_file('sha256', $zipFile),
+                'sha256'=>(string)($meta['downloadSha256'] ?? hash_file('sha256', $zipFile)),
                 'splitPrivate'=>$privatePayload !== null,
             ]);
 
@@ -146,6 +153,9 @@ final class ReleaseManager
                 'release'=>$releaseId,
                 'commit'=>$meta['commit'] ?? null,
                 'splitPrivate'=>$privatePayload !== null,
+                'artifactId'=>$meta['artifactId'] ?? null,
+                'artifactDigest'=>$meta['artifactDigest'] ?? null,
+                'requestId'=>$meta['requestId'] ?? null,
             ], $user);
             return [
                 'ok'=>true,
