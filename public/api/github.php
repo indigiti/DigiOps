@@ -139,6 +139,7 @@ try {
                 'id'=>$candidateArtifact['id']??null,
                 'name'=>$candidateArtifact['name']??'',
                 'sizeBytes'=>$candidateArtifact['size_in_bytes']??null,
+                'digest'=>$candidateArtifact['digest']??null,
                 'createdAt'=>$candidateArtifact['created_at']??null,
                 'updatedAt'=>$candidateArtifact['updated_at']??null,
                 'expiresAt'=>$candidateArtifact['expires_at']??null,
