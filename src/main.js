@@ -327,6 +327,15 @@ function app(){
       if(Number.isNaN(d.getTime()))return String(value)
       return new Intl.DateTimeFormat('en-IN',{dateStyle:'medium',timeStyle:'short'}).format(d)
     },
+    deploymentJobPhase(job){
+      if(!job)return 'unknown'
+      return String(job.phase||job.state||'unknown').replace(/[-_]+/g,' ')
+    },
+    deploymentJobIdentity(job){
+      if(!job)return '—'
+      const run=job.runNumber?('#'+job.runNumber):(job.runId?('run '+job.runId):'build')
+      return run+' · artifact '+(job.artifactId||'—')
+    },
     healthFreshness(p){
       if(!p||!p.healthCheckedAt)return 'Not verified'
       const ts=new Date(p.healthCheckedAt).getTime()
@@ -1103,18 +1112,12 @@ document.querySelector('#app').innerHTML=`
             <button @click="go('deployments')" class="quick-action"><span class="quick-icon"><i data-lucide="rocket"></i></span><span><b>Review deployments</b><small>See recent releases and deployable updates.</small></span></button>
             <button @click="go('health-center')" class="quick-action"><span class="quick-icon"><i data-lucide="heart-pulse"></i></span><span><b>Check readiness</b><small>Review last-known application and target state.</small></span></button>
           </div>
-          <div class="flex flex-wrap items-end justify-between gap-4">
-            <div><p class="text-sm font-medium text-blue-600">Fleet operations</p><h1 class="mt-1 text-2xl font-bold">Operations Dashboard</h1><p class="muted mt-1">Last-known fleet state across applications and deployment targets. No remote checks run just by opening this page.</p></div>
-            <div class="flex flex-wrap gap-2"><button @click="go('targets')" class="btn" x-show="userRole==='admin'"><i data-lucide="server" class="h-4 w-4"></i>Targets</button><button @click="openCreate()" class="btn btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>Add application</button></div>
-          </div>
-
-          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-            <button @click="go('projects')" class="stat-card text-left"><span class="muted">Applications</span><div class="mt-3 text-3xl font-bold" x-text="stats.total"></div><small class="mt-2 block text-slate-400">Registered fleet</small></button>
-            <button @click="go('targets')" class="stat-card text-left"><span class="muted">Targets</span><div class="mt-3 text-3xl font-bold" x-text="stats.targets"></div><small class="mt-2 block text-slate-400"><span x-text="stats.remoteTargets"></span> remote</small></button>
-            <button @click="filter='healthy';go('projects')" class="stat-card text-left"><span class="muted">Healthy</span><div class="mt-3 text-3xl font-bold text-emerald-700" x-text="stats.healthy"></div><small class="mt-2 block text-slate-400">Last known</small></button>
-            <button @click="filter='attention';go('projects')" class="stat-card text-left"><span class="muted">Attention</span><div class="mt-3 text-3xl font-bold text-rose-700" x-text="stats.attention"></div><small class="mt-2 block text-slate-400">Needs review</small></button>
-            <button @click="filter='updates';go('projects')" class="stat-card text-left"><span class="muted">Updates</span><div class="mt-3 text-3xl font-bold text-amber-700" x-text="stats.updates"></div><small class="mt-2 block text-slate-400">Known available</small></button>
-            <div class="stat-card"><span class="muted">Pending</span><div class="mt-3 text-3xl font-bold" x-text="stats.pending"></div><small class="mt-2 block text-slate-400">Not checked yet</small></div>
+          <div class="fleet-strip">
+            <button @click="go('projects')" class="fleet-chip"><span>Applications</span><b x-text="stats.total"></b></button>
+            <button @click="go('deployments')" class="fleet-chip"><span>Active deploys</span><b x-text="backgroundDeploymentCount"></b></button>
+            <button @click="filter='healthy';go('projects')" class="fleet-chip"><span>Healthy</span><b class="text-emerald-700" x-text="stats.healthy"></b></button>
+            <button @click="filter='attention';go('projects')" class="fleet-chip"><span>Attention</span><b class="text-rose-700" x-text="stats.attention"></b></button>
+            <button @click="filter='updates';go('projects')" class="fleet-chip"><span>Updates</span><b class="text-amber-700" x-text="stats.updates"></b></button>
           </div>
 
           <div class="grid gap-5 xl:grid-cols-[1.2fr_.8fr]">
@@ -1130,29 +1133,17 @@ document.querySelector('#app').innerHTML=`
             </div>
           </div>
 
-          <div class="grid gap-5 xl:grid-cols-2">
-            <div class="panel">
-              <div class="mb-4 flex items-start justify-between gap-3"><div><h2 class="font-bold">Recent deployments</h2><p class="muted mt-1">Most recently deployed applications from local registry metadata.</p></div><button @click="go('projects')" class="btn">View registry</button></div>
-              <div x-show="recentDeployments.length===0" class="rounded-2xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">No deployment history recorded yet.</div>
-              <template x-for="p in recentDeployments" :key="p.id"><button @click="openProject(p.id)" class="row w-full text-left"><span class="min-w-0"><b class="block truncate" x-text="p.name"></b><small class="block truncate text-slate-500" x-text="p.release"></small></span><span class="text-right text-xs text-slate-500" x-text="formatDate(p.lastDeploy)"></span></button></template>
-            </div>
-
-            <div class="panel">
-              <div class="mb-4"><h2 class="font-bold">Fleet model</h2><p class="muted mt-1">Designed to scale without dashboard fan-out.</p></div>
-              <div class="grid gap-3 sm:grid-cols-2">
-                <div class="rounded-2xl bg-slate-50 p-4"><b class="block text-sm">Dashboard load</b><span class="mt-1 block text-2xl font-bold">Local only</span><small class="text-slate-500">No GitHub or remote target calls</small></div>
-                <div class="rounded-2xl bg-slate-50 p-4"><b class="block text-sm">Remote checks</b><span class="mt-1 block text-2xl font-bold">On demand</span><small class="text-slate-500">Per app / explicit action</small></div>
-                <div class="rounded-2xl bg-slate-50 p-4"><b class="block text-sm">Application data</b><span class="mt-1 block text-2xl font-bold">Cached</span><small class="text-slate-500">Single-flight requests</small></div>
-                <div class="rounded-2xl bg-slate-50 p-4"><b class="block text-sm">Navigation</b><span class="mt-1 block text-2xl font-bold">Pretty URLs</span><small class="text-slate-500">Bookmarkable app tabs</small></div>
-              </div>
-            </div>
+          <div class="panel">
+            <div class="mb-4 flex items-start justify-between gap-3"><div><h2 class="font-bold">Deployment activity</h2><p class="muted mt-1">Server-owned deployment history. This survives browser reloads and device changes.</p></div><button @click="go('deployments')" class="btn">Deployment Center</button></div>
+            <div x-show="recentDeploymentJobs.length===0" class="empty-state">No deployment jobs recorded yet.</div>
+            <template x-for="j in recentDeploymentJobs.slice(0,6)" :key="j.requestId"><button @click="openProjectTab(j.project,'deploy')" class="row w-full text-left"><span class="min-w-0"><b class="block truncate" x-text="j.projectName||j.project"></b><small class="block truncate text-slate-500"><span x-text="deploymentJobIdentity(j)"></span> · <span class="capitalize" x-text="deploymentJobPhase(j)"></span></small></span><span class="text-right"><span class="pill capitalize" x-text="j.state"></span><small class="mt-1 block text-slate-400" x-text="formatDate(j.updatedAt)"></small></span></button></template>
           </div>
         </section>
 
         <section x-show="page==='projects'">
           <div class="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p class="text-sm font-medium text-blue-600">Application registry</p><h1 class="mt-1 text-2xl font-bold">Applications</h1><p class="muted mt-1">Independent GitHub projects with isolated Cloudways paths.</p></div><button @click="openCreate()" class="btn btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>Create application</button></div>
           <div class="mb-5 flex flex-wrap gap-2 border-b border-slate-200 pb-4"><button @click="filter='all'" class="pill" :class="filter==='all'?'border-blue-200 bg-blue-50 text-blue-700':''">All <span x-text="stats.total"></span></button><button @click="filter='updates'" class="pill">Updates <span x-text="stats.updates"></span></button><button @click="filter='healthy'" class="pill">Healthy <span x-text="stats.healthy"></span></button><button @click="filter='attention'" class="pill">Attention <span x-text="stats.attention"></span></button></div>
-          <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"><template x-for="p in filteredProjects" :key="p.id"><button @click="openProject(p.id)" class="project-card"><div class="flex items-start justify-between"><div class="flex min-w-0 items-center gap-3"><span class="grid h-11 w-11 place-items-center rounded-2xl bg-blue-50 text-blue-700"><i data-lucide="folder-git-2"></i></span><span class="min-w-0"><b class="block truncate" x-text="p.name"></b><small class="block truncate text-slate-500" x-text="p.repo"></small></span></div><i data-lucide="more-vertical" class="h-5 w-5 text-slate-400"></i></div><div class="mt-5 flex flex-wrap gap-2"><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="p.branch"></span></span><span class="pill"><i data-lucide="server" class="h-3.5 w-3.5"></i><span x-text="targetName(p.targetId||'local')"></span></span><span class="pill"><span class="status-dot" :class="p.health==='healthy'?'bg-emerald-500':p.health==='attention'?'bg-rose-500':'bg-amber-500'"></span><span x-text="p.health"></span></span><span x-show="p.update" class="pill border-amber-200 bg-amber-50 text-amber-700">Update available</span></div><div class="mt-auto grid grid-cols-2 gap-3 pt-6 text-xs"><div><span class="text-slate-400">URL</span><b class="mt-1 block" x-text="p.url"></b></div><div><span class="text-slate-400">Release</span><b class="mt-1 block truncate" x-text="p.release"></b></div></div></button></template></div>
+          <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"><template x-for="p in filteredProjects" :key="p.id"><button @click="openProject(p.id)" class="project-card"><div class="flex items-start justify-between"><div class="flex min-w-0 items-center gap-3"><span class="grid h-11 w-11 place-items-center rounded-2xl bg-blue-50 text-blue-700"><i data-lucide="folder-git-2"></i></span><span class="min-w-0"><b class="block truncate" x-text="p.name"></b><small class="block truncate text-slate-500" x-text="p.repo"></small></span></div><i data-lucide="more-vertical" class="h-5 w-5 text-slate-400"></i></div><div class="mt-5 flex flex-wrap gap-2"><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="p.branch"></span></span><span class="pill"><i data-lucide="server" class="h-3.5 w-3.5"></i><span x-text="targetName(p.targetId||'local')"></span></span><span class="pill" :title="healthFreshness(p)"><span class="status-dot" :class="p.health==='healthy'?'bg-emerald-500':p.health==='attention'?'bg-rose-500':'bg-amber-500'"></span><span x-text="p.health"></span></span><span x-show="p.update" class="pill border-amber-200 bg-amber-50 text-amber-700">Update available</span></div><div class="mt-auto grid grid-cols-2 gap-3 pt-6 text-xs"><div><span class="text-slate-400">URL</span><b class="mt-1 block" x-text="p.url"></b></div><div><span class="text-slate-400">Release</span><b class="mt-1 block truncate" x-text="p.release"></b></div></div></button></template></div>
         </section>
 
         <section x-show="page==='project' && selected">
@@ -1193,6 +1184,7 @@ document.querySelector('#app').innerHTML=`
                   <div class="row"><span class="muted">Configured name</span><code x-text="selectedArtifactName"></code></div>
                   <div class="row"><span class="muted">Selected name</span><code x-text="candidateArtifactName"></code></div>
                   <div class="row"><span class="muted">Match rule</span><span x-text="candidateArtifact&&candidateArtifact.match?candidateArtifact.match:'—'"></span></div>
+                  <div class="row"><span class="muted">Digest</span><code class="max-w-[65%] truncate text-xs" x-text="candidateArtifact&&candidateArtifact.digest?candidateArtifact.digest:'Not supplied by GitHub'"></code></div>
                   <div class="row"><span class="muted">Created</span><span x-text="candidateArtifact&&candidateArtifact.createdAt?candidateArtifact.createdAt:'—'"></span></div>
                   <div class="row"><span class="muted">Expires</span><span x-text="candidateArtifactExpires"></span></div>
                   <div class="row"><span class="muted">Artifacts in run</span><b x-text="candidate&&candidate.artifactCount?candidate.artifactCount:'—'"></b></div>
