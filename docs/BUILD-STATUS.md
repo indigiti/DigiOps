@@ -27,6 +27,7 @@
 - [x] Same transactional switch on remote agent
 - [x] Remote capability gate for transactional publication
 - [x] Remote agent independently enforces public_html/private_html path roots
+- [x] DigiOps private release payload is limited to deployable `app/`, `agent/`, and `build/` roots so persistent state cannot be overlaid
 - [x] ZIP traversal and symlink rejection
 - [x] Payload entrypoint validation
 - [x] Local storage/disk preflight
