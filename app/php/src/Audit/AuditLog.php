@@ -23,20 +23,9 @@ final class AuditLog
             if (is_file($headFile)) {
                 $previousHash = trim((string)file_get_contents($headFile));
             } elseif (is_file($this->file) && filesize($this->file) > 0) {
-                $fp=fopen($this->file,'rb');
-                if($fp){
-                    $pos=-2;$line='';
-                    fseek($fp,$pos,SEEK_END);
-                    while(ftell($fp)>0){
-                        $ch=fgetc($fp);
-                        if($ch==="\n" && $line!=='') break;
-                        $line=$ch.$line;
-                        fseek($fp,--$pos,SEEK_END);
-                    }
-                    fclose($fp);
-                    $last=json_decode(trim($line),true);
-                    $previousHash=is_array($last)?(string)($last['hash']??''):'';
-                }
+                $lines=file($this->file,FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES) ?: [];
+                $last=json_decode((string)end($lines),true);
+                $previousHash=is_array($last)?(string)($last['hash']??''):'';
             }
 
             $entry = [
