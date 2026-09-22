@@ -41,6 +41,7 @@ $reply=static function(array $payload,int $http=200) use ($jobs,$requestId): nev
         elseif(in_array($state,['deployed','failed'],true))$patch['progress']=100;
         if(isset($payload['release']))$patch['release']=(string)$payload['release'];
         if(isset($payload['error']))$patch['error']=(string)$payload['error'];
+        if(isset($payload['source']))$patch['verificationSource']=(string)$payload['source'];
         if(in_array($state,['deployed','failed'],true))$patch['completedAt']=date(DATE_ATOM);
         try{$jobs->patch($requestId,$patch);}catch(Throwable){}
     }
