@@ -130,15 +130,33 @@ final class ReleaseManager
             $publishTmp = dirname($publicTarget) . '/.' . $slug . '.publish-' . bin2hex(random_bytes(4));
             Files::copyDir($releaseDir . '/public', $publishTmp);
 
+            $overlayPlan=null;
             if ($privatePayload !== null) {
-                Files::ensureDir($privateTarget);
-                // Private deployment is an overlay so runtime state (dataset/users/logs)
-                // under private_html/<app>/ is never deleted by a code release.
-                Files::copyDir($releaseDir . '/private', $privateTarget);
+                // Private code is overlaid because runtime state may coexist under
+                // private_html/<app>/. Preflight every touched path and keep backups
+                // until the public atomic switch succeeds, so a publication failure
+                // cannot leave a partially updated private code tree behind.
+                $overlayPlan=Files::beginOverlay(
+                    $releaseDir . '/private',
+                    $privateTarget,
+                    $runtime . '/overlay-backup/' . $releaseId
+                );
+                Files::applyOverlay($overlayPlan);
             }
 
-            $this->writeDeploymentState($slug,'running','switching',94,$stateMeta+['release'=>$releaseId]);
-            $this->switcher->switch($publishTmp, $publicTarget, $slug);
+            try {
+                $this->writeDeploymentState($slug,'running','switching',94,$stateMeta+['release'=>$releaseId]);
+                $this->switcher->switch($publishTmp, $publicTarget, $slug);
+            } catch (\Throwable $e) {
+                if($overlayPlan!==null){
+                    try { Files::rollbackOverlay($overlayPlan); }
+                    catch(\Throwable $restore){
+                        throw new RuntimeException('PUBLICATION_FAILED_PRIVATE_RESTORE_FAILED:'.$e->getMessage().':'.$restore->getMessage(),0,$e);
+                    }
+                }
+                throw $e;
+            }
+            if($overlayPlan!==null) Files::commitOverlay($overlayPlan);
 
             $this->projects->patchRuntime($slug, [
                 'status'=>'deployed',
