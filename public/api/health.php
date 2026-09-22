@@ -45,11 +45,12 @@ try {
     }else{
         $result=(new RemoteDeploymentDriver())->health($id,$project);
         $checkedAt=(string)($result['checkedAt']??date(DATE_ATOM));
+        $result['checkedAt']=$checkedAt;
         $registry->patchRuntime($id,[
             'health'=>($result['ok']??false)?'healthy':'attention',
             'healthCheckedAt'=>$checkedAt,
+            'healthDetail'=>$result,
         ]);
-        $result['checkedAt']=$checkedAt;
     }
 
     if($requestId!==''){

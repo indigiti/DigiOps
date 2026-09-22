@@ -286,11 +286,26 @@ function app(){
     get selectedArtifactName(){return this.selected ? this.selected.artifactName : ''},
     get selectedRetention(){return this.selected ? this.selected.retention : ''},
     get selectedHealthPath(){return this.selected ? this.selected.healthPath : ''},
+    get selectedHealthUrl(){return this.resolveHealthUrl(this.selected)},
+    get selectedHealthCheckedAt(){
+      const detail=this.health||(this.selected&&this.selected.healthDetail)||null
+      return detail&&detail.checkedAt?this.formatDate(detail.checkedAt):(this.selected&&this.selected.healthCheckedAt?this.formatDate(this.selected.healthCheckedAt):'Never')
+    },
     get selectedTargetId(){return this.selected && this.selected.targetId ? this.selected.targetId : 'local'},
     get runtimeVersion(){return this.runtimeInfo&&this.runtimeInfo.version?this.runtimeInfo.version:'—'},
     get runtimeArtifactId(){return this.runtimeInfo&&this.runtimeInfo.artifactId?String(this.runtimeInfo.artifactId):'—'},
     get runtimeSourceShort(){return this.runtimeInfo&&this.runtimeInfo.sourceSha?String(this.runtimeInfo.sourceSha).slice(0,12):'—'},
     get runtimeSourceFull(){return this.runtimeInfo&&this.runtimeInfo.sourceSha?String(this.runtimeInfo.sourceSha):''},
+    resolveHealthUrl(project){
+      if(!project)return ''
+      const detail=project.healthDetail&&typeof project.healthDetail==='object'?project.healthDetail:null
+      if(detail&&detail.url)return String(detail.url)
+      const base=String(project.url||'').trim()
+      const healthPath=String(project.healthPath||'/').trim()||'/'
+      if(!base)return ''
+      const absolute=/^https?:\/\//i.test(base)?base:(window.location.origin+'/'+base.replace(/^\/+/,'')) 
+      return absolute.replace(/\/+$/,'')+'/'+healthPath.replace(/^\/+/, '')
+    },
     targetName(id){const t=this.targets.find(x=>x.id===id);return t?t.name:id},
     openHelp(topic='dashboard'){this.helpTopic=HELP_TOPICS[topic]?topic:(this.page==='project'?(HELP_TOPICS[this.projectTab]?this.projectTab:'project'):this.page);this.helpOpen=true;icons()},
     closeHelp(){this.helpOpen=false},
@@ -681,7 +696,7 @@ function app(){
         this.selectedId=project.id;this.page='project';this.projectTab=tab
         this.githubInfo=this.cacheGet('github',project.id,120000)
         this.releases=this.cacheGet('releases',project.id,300000)||[]
-        this.health=this.cacheGet('health',project.id,60000)
+        this.health=this.cacheGet('health',project.id,60000)||(project.healthDetail&&typeof project.healthDetail==='object'?project.healthDetail:null)
         this.fileListing=null
         if(tab==='releases'&&this.releases.length===0)this.loadReleases(false)
         if(tab==='files'&&!this.fileListing)this.browse('public','',false)
@@ -1393,8 +1408,20 @@ document.querySelector('#app').innerHTML=`
             <div x-show="releases.length===0" class="p-6 text-sm text-slate-500">No releases yet.</div>
           </div>
           <div x-show="projectTab==='files'" class="panel"><div class="mb-4 flex gap-2"><button @click="browse('public','')" class="btn">Public</button><button @click="browse('private','')" class="btn">Private</button></div><div class="mb-3 font-mono text-xs text-slate-500" x-text="filePathLabel"></div><div class="divide-y divide-slate-100"><template x-for="f in fileItems" :key="f.name"><div class="flex items-center justify-between py-3 text-sm"><span class="flex items-center gap-2"><i data-lucide="file-text" class="h-4 w-4 text-slate-400"></i><span x-text="f.name"></span></span><span class="text-xs text-slate-400" x-text="f.type==='dir'?'Folder':f.size+' B'"></span></div></template></div></div>
-          <div x-show="projectTab==='health'" class="grid gap-4 md:grid-cols-3"><div class="stat-card"><i data-lucide="heart-pulse" class="h-5 w-5 text-emerald-600"></i><h3 class="mt-3 font-bold">HTTP</h3><p class="muted mt-1" x-text="healthHttpText"></p></div><div class="stat-card"><i data-lucide="hard-drive" class="h-5 w-5 text-blue-600"></i><h3 class="mt-3 font-bold">Storage</h3><p class="muted mt-1" x-text="healthStorageText"></p></div><div class="stat-card"><i data-lucide="server" class="h-5 w-5 text-violet-600"></i><h3 class="mt-3 font-bold">Runtime</h3><p class="muted mt-1" x-text="healthRuntimeText"></p></div></div>
-          <div x-show="projectTab==='settings'" class="panel"><h2 class="font-bold">Application settings</h2><div class="mt-5 grid gap-4 md:grid-cols-2"><div><span class="muted">Repository</span><b class="mt-1 block" x-text="selectedRepo"></b></div><div><span class="muted">Branch</span><b class="mt-1 block" x-text="selectedBranch"></b></div><div><span class="muted">Artifact</span><b class="mt-1 block" x-text="selectedArtifactName"></b></div><div><span class="muted">Health path</span><b class="mt-1 block" x-text="selectedHealthPath"></b></div><div><span class="muted">Deployment target</span><b class="mt-1 block" x-text="targetName(selectedTargetId)"></b></div><div><span class="muted">Public path</span><code class="mt-1 block text-xs" x-text="selectedPublicPath"></code></div><div><span class="muted">Private path</span><code class="mt-1 block text-xs" x-text="selectedPrivatePath"></code></div></div></div>
+          <div x-show="projectTab==='health'" class="space-y-4">
+            <div class="panel">
+              <div class="flex flex-wrap items-start justify-between gap-4">
+                <div class="min-w-0"><p class="text-sm font-medium text-emerald-600">Health endpoint</p><h2 class="mt-1 text-lg font-bold">Resolved health URL</h2><code class="mt-2 block break-all text-sm text-slate-700" x-text="selectedHealthUrl"></code><p class="muted mt-2">Configured path <code x-text="selectedHealthPath||'/'"></code> · Last checked <span x-text="selectedHealthCheckedAt"></span></p></div>
+                <button @click="checkHealth(false)" class="btn btn-primary" :disabled="busy"><i data-lucide="heart-pulse" class="h-4 w-4"></i><span x-text="busy?'Checking…':'Check now'"></span></button>
+              </div>
+            </div>
+            <div class="grid gap-4 md:grid-cols-3">
+              <div class="stat-card"><i data-lucide="heart-pulse" class="h-5 w-5 text-emerald-600"></i><h3 class="mt-3 font-bold">HTTP</h3><p class="muted mt-1" x-text="healthHttpText"></p></div>
+              <div class="stat-card"><i data-lucide="hard-drive" class="h-5 w-5 text-blue-600"></i><h3 class="mt-3 font-bold">Storage</h3><p class="muted mt-1" x-text="healthStorageText"></p></div>
+              <div class="stat-card"><i data-lucide="server" class="h-5 w-5 text-violet-600"></i><h3 class="mt-3 font-bold">Runtime</h3><p class="muted mt-1" x-text="healthRuntimeText"></p></div>
+            </div>
+          </div>
+          <div x-show="projectTab==='settings'" class="panel"><h2 class="font-bold">Application settings</h2><div class="mt-5 grid gap-4 md:grid-cols-2"><div><span class="muted">Repository</span><b class="mt-1 block" x-text="selectedRepo"></b></div><div><span class="muted">Branch</span><b class="mt-1 block" x-text="selectedBranch"></b></div><div><span class="muted">Artifact</span><b class="mt-1 block" x-text="selectedArtifactName"></b></div><div><span class="muted">Application URL</span><code class="mt-1 block break-all text-sm" x-text="selectedUrl"></code></div><div><span class="muted">Health URL</span><code class="mt-1 block break-all text-sm" x-text="selectedHealthUrl"></code><small class="mt-1 block text-slate-500">Health path: <code x-text="selectedHealthPath||'/'"></code></small></div><div><span class="muted">Deployment target</span><b class="mt-1 block" x-text="targetName(selectedTargetId)"></b></div><div><span class="muted">Public path</span><code class="mt-1 block text-xs" x-text="selectedPublicPath"></code></div><div><span class="muted">Private path</span><code class="mt-1 block text-xs" x-text="selectedPrivatePath"></code></div></div></div>
         </section>
 
         <section data-digiops-page="deployments" x-show="page==='deployments'" class="space-y-6">

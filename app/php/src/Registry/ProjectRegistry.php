@@ -64,7 +64,7 @@ final class ProjectRegistry
     {
         $id = PathGuard::slug($id);
         $allowed = array_flip([
-            'status','health','healthCheckedAt','update','commit','release','lastDeploy',
+            'status','health','healthCheckedAt','healthDetail','update','commit','release','lastDeploy',
             'stack','environment'
         ]);
 
@@ -101,6 +101,39 @@ final class ProjectRegistry
         if (!preg_match('/^[A-Za-z0-9._\/-]{1,160}$/', $record['branch'])) throw new InvalidArgumentException('INVALID_BRANCH');
     }
 
+
+    private function normalizeHealthDetail(mixed $value): ?array
+    {
+        if (!is_array($value)) return null;
+        $http=is_array($value['http']??null)?$value['http']:[];
+        $storage=is_array($value['storage']??null)?$value['storage']:[];
+        $runtime=is_array($value['runtime']??null)?$value['runtime']:[];
+        $url=trim((string)($value['url']??''));
+        if($url!=='' && !filter_var($url,FILTER_VALIDATE_URL))$url='';
+
+        return [
+            'ok'=>(bool)($value['ok']??false),
+            'url'=>$url,
+            'checkedAt'=>(string)($value['checkedAt']??''),
+            'http'=>[
+                'ok'=>(bool)($http['ok']??false),
+                'status'=>isset($http['status'])?(int)$http['status']:null,
+                'ms'=>isset($http['ms'])?(int)$http['ms']:null,
+            ],
+            'storage'=>[
+                'exists'=>(bool)($storage['exists']??false),
+                'bytes'=>(int)($storage['bytes']??0),
+                'writable'=>(bool)($storage['writable']??false),
+            ],
+            'runtime'=>[
+                'php'=>(string)($runtime['php']??''),
+                'curl'=>(bool)($runtime['curl']??false),
+                'zip'=>(bool)($runtime['zip']??false),
+                'sodium'=>(bool)($runtime['sodium']??false),
+            ],
+        ];
+    }
+
     private function normalize(array $project): array
     {
         $slug = PathGuard::slug((string)($project['id'] ?? $project['slug'] ?? ''));
@@ -132,6 +165,7 @@ final class ProjectRegistry
             'status' => (string)($project['status'] ?? 'configured'),
             'health' => (string)($project['health'] ?? 'pending'),
             'healthCheckedAt' => $project['healthCheckedAt'] ?? null,
+            'healthDetail' => $this->normalizeHealthDetail($project['healthDetail'] ?? null),
             'update' => (bool)($project['update'] ?? false),
             'commit' => (string)($project['commit'] ?? '—'),
             'release' => (string)($project['release'] ?? 'Not deployed'),
