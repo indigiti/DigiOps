@@ -55,7 +55,7 @@ final class ReleaseManager
         if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) throw new RuntimeException('DEPLOYMENT_LOCKED');
 
         try {
-            $stateMeta=['commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??'')];
+            $stateMeta=['commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??''),'requestId'=>(string)($meta['requestId']??'')];
             $this->writeDeploymentState($slug,'running','validating',38,$stateMeta+['startedAt'=>date(DATE_ATOM)]);
             $releaseId = date('Ymd-His') . '-' . substr((string)($meta['commit'] ?? bin2hex(random_bytes(4))), 0, 8);
             $stage = $runtime . '/staging/' . $releaseId;
@@ -95,6 +95,7 @@ final class ReleaseManager
                 'project'=>$slug,
                 'commit'=>(string)($meta['commit'] ?? ''),
                 'artifactId'=>(string)($meta['artifactId'] ?? ''),
+                'requestId'=>(string)($meta['requestId'] ?? ''),
                 'createdAt'=>date(DATE_ATOM),
                 'sha256'=>hash_file('sha256', $zipFile),
                 'splitPrivate'=>$privatePayload !== null,
@@ -134,6 +135,7 @@ final class ReleaseManager
             return [
                 'ok'=>true,
                 'release'=>$releaseId,
+                'requestId'=>(string)($meta['requestId']??''),
                 'publicPath'=>$project['publicPath'],
                 'privatePath'=>$privatePayload !== null ? $project['privatePath'] : null,
             ];
@@ -141,6 +143,7 @@ final class ReleaseManager
             $this->writeDeploymentState($slug,'failed','failed',100,[
                 'commit'=>(string)($meta['commit']??''),
                 'artifactId'=>(string)($meta['artifactId']??''),
+                'requestId'=>(string)($meta['requestId']??''),
                 'error'=>$e->getMessage(),
             ]);
             throw $e;
