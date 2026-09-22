@@ -17,7 +17,7 @@ final class HealthService
         $project = $this->projects->find($projectId);
         if (!$project) throw new RuntimeException('PROJECT_NOT_FOUND');
         $slug = PathGuard::slug($projectId);
-        $origin=$this->canonicalOrigin();
+        $origin=HealthOrigin::configured();
         return $origin . '/' . $slug . '/' . ltrim((string)$project['healthPath'], '/');
     }
 
@@ -60,24 +60,5 @@ final class HealthService
             'healthDetail'=>$result,
         ]);
         return $result;
-    }
-
-    private function canonicalOrigin(): string
-    {
-        $origin=trim((string)(getenv('DIGIOPS_CANONICAL_ORIGIN') ?: getenv('APP_URL') ?: ''));
-        if($origin==='') throw new RuntimeException('HEALTH_ORIGIN_NOT_CONFIGURED');
-        if(!filter_var($origin,FILTER_VALIDATE_URL)) throw new RuntimeException('HEALTH_ORIGIN_INVALID');
-
-        $parts=parse_url($origin);
-        if(!is_array($parts)) throw new RuntimeException('HEALTH_ORIGIN_INVALID');
-        $scheme=strtolower((string)($parts['scheme']??''));
-        if(!in_array($scheme,['http','https'],true) || empty($parts['host'])) throw new RuntimeException('HEALTH_ORIGIN_INVALID');
-        if(isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])) {
-            throw new RuntimeException('HEALTH_ORIGIN_INVALID');
-        }
-        $path=(string)($parts['path']??'');
-        if($path!=='' && $path!=='/') throw new RuntimeException('HEALTH_ORIGIN_INVALID');
-
-        return rtrim($origin,'/');
     }
 }

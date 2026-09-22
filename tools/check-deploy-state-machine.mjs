@@ -11,6 +11,8 @@ const switcher=read('app/php/src/Deploy/AtomicReleaseSwitcher.php');
 const jobRepo=read('app/php/src/Deploy/DeploymentJobRepository.php');
 const deploy=read('public/api/deploy.php');
 const health=read('public/api/health.php');
+const healthOrigin=read('app/php/src/Health/HealthOrigin.php');
+const infrastructure=read('public/api/infrastructure.php');
 const githubClient=read('app/php/src/GitHub/GitHubClient.php');
 
 const checks=[
@@ -24,6 +26,8 @@ const checks=[
   ['Deploy status persists authoritative state into job journal', status.includes('DeploymentJobRepository') && status.includes("$jobs->patch")],
   ['Post-deploy health is attached to deployment job', health.includes('DeploymentJobRepository') && health.includes("'health-verified'") && health.includes("'health-attention'")],
   ['Detailed health state persists across reloads', health.includes("'healthDetail'=>$result") && ui.includes('selectedHealthUrl') && ui.includes('selectedHealthCheckedAt')],
+  ['Trusted health origin can be persisted in DigiOps settings', healthOrigin.includes("infrastructure.json") && infrastructure.includes("'origin-save'") && infrastructure.includes("'applicationOrigin'") && ui.includes('saveApplicationOrigin')],
+  ['Health origin never falls back to request Host header', !healthOrigin.includes('HTTP_HOST') && healthOrigin.includes('HEALTH_ORIGIN_NOT_CONFIGURED')],
   ['Health UI exposes an explicit fresh check action', ui.includes("@click=\"checkHealth(false)\"") && ui.includes('Resolved health URL')],
   ['Direct deploy health keeps request identity', ui.includes('checkHealth(true,requestId)') && ui.includes('healthPayload.requestId=requestId')],
   ['Only uncertain remote commit responses enter authoritative confirmation', deploy.includes("str_starts_with($message,'REMOTE_COMMIT_UNCERTAIN_')") && ui.includes("payload.state==='unavailable'")],

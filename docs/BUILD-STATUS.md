@@ -2,7 +2,7 @@
 
 ## Release
 
-**v1.8.4 — Health Visibility**
+**v1.8.5 — Trusted Health Origin**
 
 ## Control plane
 
@@ -82,6 +82,8 @@
 - [x] health freshness displayed in the UI
 - [x] Resolved full health URL shown in application Settings and Health views
 - [x] Detailed health result persisted across reloads with explicit Check now action
+- [x] Application origin stored once in DigiOps settings and reused for all local app health URLs
+- [x] Health origin no longer requires a Cloudways environment variable when DigiOps settings contain the trusted origin
 - [x] application overview exposes workflow run, artifact ID, candidate/deployed commit and source/deployable gap without opening the deploy tab
 
 ## CI
