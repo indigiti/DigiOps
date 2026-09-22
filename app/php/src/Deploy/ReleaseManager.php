@@ -50,6 +50,7 @@ final class ReleaseManager
                     'progress'=>$payload['progress'],
                     'release'=>(string)($payload['release']??''),
                     'error'=>(string)($payload['error']??''),
+                    'verificationSource'=>'local-release-manager',
                 ];
                 if($state==='deployed')$patch['completedAt']=date(DATE_ATOM);
                 $this->jobs->patch($requestId,$patch);
@@ -165,7 +166,9 @@ final class ReleaseManager
                 'privatePath'=>$privatePayload !== null ? $project['privatePath'] : null,
             ];
         } catch (\Throwable $e) {
-            $this->writeDeploymentState($slug,'failed','failed',100,[
+            $currentState=$this->deploymentState($slug);
+            $failurePhase=(string)($currentState['phase']??'failed');
+            $this->writeDeploymentState($slug,'failed',$failurePhase!==''?$failurePhase:'failed',100,[
                 'commit'=>(string)($meta['commit']??''),
                 'artifactId'=>(string)($meta['artifactId']??''),
                 'requestId'=>(string)($meta['requestId']??''),
