@@ -603,7 +603,7 @@ function app(){
         if(tab==='files'&&!this.fileListing)this.browse('public','',false)
         icons();return
       }
-      if(parts[0]==='deployments'){this.page='deployments';this.selectedId=null;icons();return}
+      if(parts[0]==='deployments'){this.page='deployments';this.selectedId=null;await this.syncDeploymentWatches();icons();return}
       if(parts[0]==='health'){this.page='health-center';this.selectedId=null;icons();return}
       if(parts[0]==='guide'){this.page='guide';this.selectedId=null;icons();return}
       if(parts[0]==='targets'&&this.userRole==='admin'){this.page='targets';this.selectedId=null;await this.loadTargets();icons();return}
@@ -1263,6 +1263,76 @@ document.querySelector('#app').innerHTML=`
           <div x-show="projectTab==='files'" class="panel"><div class="mb-4 flex gap-2"><button @click="browse('public','')" class="btn">Public</button><button @click="browse('private','')" class="btn">Private</button></div><div class="mb-3 font-mono text-xs text-slate-500" x-text="filePathLabel"></div><div class="divide-y divide-slate-100"><template x-for="f in fileItems" :key="f.name"><div class="flex items-center justify-between py-3 text-sm"><span class="flex items-center gap-2"><i data-lucide="file-text" class="h-4 w-4 text-slate-400"></i><span x-text="f.name"></span></span><span class="text-xs text-slate-400" x-text="f.type==='dir'?'Folder':f.size+' B'"></span></div></template></div></div>
           <div x-show="projectTab==='health'" class="grid gap-4 md:grid-cols-3"><div class="stat-card"><i data-lucide="heart-pulse" class="h-5 w-5 text-emerald-600"></i><h3 class="mt-3 font-bold">HTTP</h3><p class="muted mt-1" x-text="healthHttpText"></p></div><div class="stat-card"><i data-lucide="hard-drive" class="h-5 w-5 text-blue-600"></i><h3 class="mt-3 font-bold">Storage</h3><p class="muted mt-1" x-text="healthStorageText"></p></div><div class="stat-card"><i data-lucide="server" class="h-5 w-5 text-violet-600"></i><h3 class="mt-3 font-bold">Runtime</h3><p class="muted mt-1" x-text="healthRuntimeText"></p></div></div>
           <div x-show="projectTab==='settings'" class="panel"><h2 class="font-bold">Application settings</h2><div class="mt-5 grid gap-4 md:grid-cols-2"><div><span class="muted">Repository</span><b class="mt-1 block" x-text="selectedRepo"></b></div><div><span class="muted">Branch</span><b class="mt-1 block" x-text="selectedBranch"></b></div><div><span class="muted">Artifact</span><b class="mt-1 block" x-text="selectedArtifactName"></b></div><div><span class="muted">Health path</span><b class="mt-1 block" x-text="selectedHealthPath"></b></div><div><span class="muted">Deployment target</span><b class="mt-1 block" x-text="targetName(selectedTargetId)"></b></div><div><span class="muted">Public path</span><code class="mt-1 block text-xs" x-text="selectedPublicPath"></code></div><div><span class="muted">Private path</span><code class="mt-1 block text-xs" x-text="selectedPrivatePath"></code></div></div></div>
+        </section>
+
+        <section data-digiops-page="deployments" x-show="page==='deployments'" class="space-y-6">
+          <div class="page-heading">
+            <div><p class="eyebrow">Operate</p><h1>Deployment Center</h1><p>One place for active operations, deployable updates, and durable server-side deployment history.</p></div>
+            <div class="flex gap-2"><button @click="syncDeploymentWatches()" class="btn"><i data-lucide="refresh-cw" class="h-4 w-4"></i>Refresh</button><button @click="go('projects')" class="btn btn-primary"><i data-lucide="folder-git-2" class="h-4 w-4"></i>Applications</button></div>
+          </div>
+
+          <div class="panel">
+            <div class="mb-4 flex items-start justify-between gap-3"><div><h2 class="font-bold">Active operations</h2><p class="muted mt-1">Authoritative deployment jobs stored by DigiOps, not by this browser.</p></div><span class="pill"><span class="status-dot" :class="backgroundDeploymentCount?'bg-blue-500':'bg-emerald-500'"></span><span x-text="backgroundDeploymentCount?backgroundDeploymentCount+' active':'No active deployments'"></span></span></div>
+            <div x-show="activeDeploymentWatches.length===0" class="empty-state">No deployment is currently active.</div>
+            <template x-for="w in activeDeploymentWatches" :key="w.requestId">
+              <div class="job-row">
+                <span class="deployment-watch-icon"><i data-lucide="refresh-cw" class="h-4 w-4 animate-spin"></i></span>
+                <div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><b class="truncate" x-text="w.projectName||w.projectId"></b><span class="pill capitalize" x-text="w.status"></span></div><p class="mt-1 text-xs text-slate-500"><span class="capitalize" x-text="deploymentWatchLabel(w)"></span> · <span x-text="w.run"></span> · artifact <span x-text="w.artifact"></span></p></div>
+                <button @click="openProjectTab(w.projectId,'deploy')" class="btn py-1.5 text-xs">Open</button>
+              </div>
+            </template>
+          </div>
+
+          <div class="grid gap-5 xl:grid-cols-[.9fr_1.1fr]">
+            <div class="panel">
+              <div class="mb-4"><h2 class="font-bold">Ready to deploy</h2><p class="muted mt-1">Known successful artifacts that differ from the deployed commit.</p></div>
+              <div x-show="updateProjects.length===0" class="empty-state">No known deployable updates. Run Check update on an application when you need fresh GitHub state.</div>
+              <template x-for="p in updateProjects" :key="p.id"><div class="row"><span class="min-w-0"><b class="block truncate" x-text="p.name"></b><small class="block truncate text-slate-500" x-text="p.repo"></small></span><button @click="openProjectTab(p.id,'deploy')" class="btn py-1.5 text-xs">Review candidate</button></div></template>
+            </div>
+
+            <div class="panel">
+              <div class="mb-4"><h2 class="font-bold">Recent deployment jobs</h2><p class="muted mt-1">Exact request, artifact and outcome retained by the control plane.</p></div>
+              <div x-show="recentDeploymentJobs.length===0" class="empty-state">No deployment jobs recorded yet.</div>
+              <template x-for="j in recentDeploymentJobs" :key="j.requestId">
+                <button @click="openProjectTab(j.project,'deploy')" class="row w-full text-left">
+                  <span class="min-w-0"><b class="block truncate" x-text="j.projectName||j.project"></b><small class="block truncate text-slate-500"><span x-text="deploymentJobIdentity(j)"></span> · <span class="capitalize" x-text="deploymentJobPhase(j)"></span></small></span>
+                  <span class="text-right"><span class="pill capitalize" :class="j.state==='failed'?'border-rose-200 bg-rose-50 text-rose-700':j.state==='deployed'?'border-emerald-200 bg-emerald-50 text-emerald-700':''" x-text="j.state"></span><small class="mt-1 block text-slate-400" x-text="formatDate(j.updatedAt)"></small></span>
+                </button>
+              </template>
+            </div>
+          </div>
+        </section>
+
+        <section data-digiops-page="health" x-show="page==='health-center'" class="space-y-6">
+          <div class="page-heading"><div><p class="eyebrow">Observe</p><h1>Health & Readiness</h1><p>Health is meaningful only with freshness. Review attention and stale checks first, then probe only the applications that need current evidence.</p></div><button @click="openHelp('health')" class="btn"><i data-lucide="circle-help" class="h-4 w-4"></i>Health model</button></div>
+          <div class="fleet-strip">
+            <button @click="filter='healthy';go('projects')" class="fleet-chip"><span>Healthy</span><b class="text-emerald-700" x-text="stats.healthy"></b></button>
+            <button @click="filter='attention';go('projects')" class="fleet-chip"><span>Attention</span><b class="text-rose-700" x-text="stats.attention"></b></button>
+            <div class="fleet-chip"><span>Pending</span><b class="text-amber-700" x-text="stats.pending"></b></div>
+            <div class="fleet-chip"><span>Active deploys</span><b class="text-blue-700" x-text="backgroundDeploymentCount"></b></div>
+          </div>
+          <div class="panel">
+            <div class="mb-4"><h2 class="font-bold">Application readiness</h2><p class="muted mt-1">Attention and unverified applications are sorted first. The timestamp shows how fresh the health evidence is.</p></div>
+            <template x-for="p in healthSortedProjects" :key="p.id">
+              <div class="row">
+                <span class="min-w-0"><b class="block truncate" x-text="p.name"></b><small class="block truncate text-slate-500"><span x-text="targetName(p.targetId||'local')"></span> · <span x-text="healthFreshness(p)"></span></small></span>
+                <div class="flex items-center gap-2"><span class="pill capitalize"><span class="status-dot" :class="p.health==='healthy'?'bg-emerald-500':p.health==='attention'?'bg-rose-500':'bg-amber-500'"></span><span x-text="p.health||'pending'"></span></span><button @click="openProjectTab(p.id,'health')" class="btn py-1.5 text-xs">Verify</button></div>
+              </div>
+            </template>
+          </div>
+        </section>
+
+        <section data-digiops-page="guide" x-show="page==='guide'" class="space-y-6">
+          <div class="page-heading"><div><p class="eyebrow">Learn</p><h1>Help & Guide</h1><p>Concise operating guidance for deployment, recovery, health, targets and runtime identity.</p></div></div>
+          <div class="guide-grid">
+            <button @click="openHelp('dashboard')" class="guide-card"><span class="guide-icon"><i data-lucide="layout-dashboard"></i></span><b>Command Center</b><p>Understand attention, active deployments and last-known fleet state.</p></button>
+            <button @click="openHelp('deployments')" class="guide-card"><span class="guide-icon"><i data-lucide="rocket"></i></span><b>Deployment Center</b><p>Candidate review, transactional publication, verification and job history.</p></button>
+            <button @click="openHelp('health')" class="guide-card"><span class="guide-icon"><i data-lucide="heart-pulse"></i></span><b>Health & Readiness</b><p>Availability, runtime, storage and health freshness.</p></button>
+            <button @click="openHelp('targets')" class="guide-card"><span class="guide-icon"><i data-lucide="server"></i></span><b>Targets & Agents</b><p>Agent capabilities, secure remote execution and compatibility.</p></button>
+            <button @click="openHelp('settings')" class="guide-card"><span class="guide-icon"><i data-lucide="settings-2"></i></span><b>Connections & Runtime</b><p>GitHub, Redis, cache policy and exact running build identity.</p></button>
+            <button @click="openHelp('audit')" class="guide-card"><span class="guide-icon"><i data-lucide="file-clock"></i></span><b>Audit & Governance</b><p>Trace operator actions and deployment chain of custody.</p></button>
+          </div>
+          <div class="panel"><div class="flex items-start gap-3"><span class="guide-icon shrink-0"><i data-lucide="shield-check"></i></span><div><h2 class="font-bold">Operating rule</h2><p class="muted mt-1">DigiOps should fail before mutation, publish transactionally, verify authoritative state, and preserve enough evidence to recover without guesswork.</p></div></div></div>
         </section>
 
         <section x-show="page==='targets'" class="space-y-5">
