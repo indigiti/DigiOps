@@ -1,0 +1,28 @@
+import fs from 'node:fs';
+
+const read=p=>fs.readFileSync(new URL('../'+p,import.meta.url),'utf8');
+const ui=read('src/main.js');
+const status=read('public/api/deploy-status.php');
+const agent=read('agent/digiops-agent.php');
+const client=read('app/php/src/Targets/RemoteAgentClient.php');
+
+const checks=[
+  ['UI reconciles aborted deploys', ui.includes("aborted?'DEPLOY_RESPONSE_TIMEOUT'") && ui.includes("status.state==='deployed'")],
+  ['UI follows running agent state', ui.includes("status.state==='running'") && ui.includes("status.state==='failed'") && ui.includes('attempt<=120')],
+  ['UI does not hard-fail a known running deployment', ui.includes("lastState==='running'") && ui.includes('no second deploy was started')],
+  ['Control plane requires authoritative modern-agent marker', status.includes('$agentStatusSupported') && status.includes("'source'=>'agent-current-wait'")],
+  ['Control plane exposes remote running state', status.includes("'state'=>'running'") && status.includes("'source'=>'agent-progress'")],
+  ['Agent survives client disconnects', agent.includes('@ignore_user_abort(true)') && agent.includes('@set_time_limit(600)')],
+  ['Agent persists deployment progress', agent.includes("deployment.json") && agent.includes("setDeploymentState") && agent.includes("'snapshotting'") && agent.includes("'publishing'") && agent.includes("'switching'")],
+  ['Agent status returns current and deployment records', agent.includes("ok(['current'=>$current,'deployment'=>$deployment])")],
+  ['Agent blocks duplicate active deploys', agent.includes('DEPLOYMENT_ALREADY_RUNNING') && agent.includes('deploymentStateIsActive')],
+  ['Remote commit timeout exceeds browser response window', client.includes("'deploy-commit'=>300")],
+];
+
+const failed=checks.filter(([,ok])=>!ok).map(([name])=>name);
+if(failed.length){
+  console.error('Deploy timeout/state-machine contract: FAIL');
+  for(const item of failed) console.error(' - '+item);
+  process.exit(1);
+}
+console.log('Deploy timeout/state-machine contract: PASS · '+checks.length+' checks');

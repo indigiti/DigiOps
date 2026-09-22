@@ -19,6 +19,7 @@ jobs:
       - run: npm install
       - run: npm run check:csp
       - run: node tools/check-pretty-routes.mjs
+      - run: node tools/check-deploy-state-machine.mjs
       - run: npm run build
       - run: php tools/package-release.php
       - run: php tools/check-release-package.php

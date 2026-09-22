@@ -52,7 +52,9 @@ try {
 
     // New agents expose current.json, which is written only after the public
     // directory has been atomically published. This is authoritative evidence.
+    $agentStatusSupported=false;
     try {
+        $agentStatusSupported=true;
         $remote=$targets->remoteRequest($projectId,'deployment-status',['project'=>$projectId]);
         $current=is_array($remote['current']??null)?$remote['current']:[];
         $currentCommit=strtolower(trim((string)($current['commit']??'')));
@@ -72,9 +74,49 @@ try {
                 'commit'=>$commit,'release'=>$releaseId,'source'=>'agent-current',
             ]);
         }
+
+        // Agent v1.3+ exposes the in-flight deployment state separately from
+        // current.json. current.json remains authoritative for completion, while
+        // this state prevents a long publish from being misclassified as failed.
+        $deployment=is_array($remote['deployment']??null)?$remote['deployment']:[];
+        $deploymentCommit=strtolower(trim((string)($deployment['commit']??'')));
+        if($deploymentCommit===$commit){
+            $remoteState=strtolower(trim((string)($deployment['state']??'')));
+            if(in_array($remoteState,['uploading','running'],true)){
+                JsonResponse::send([
+                    'ok'=>true,'state'=>'running','reconciled'=>false,
+                    'commit'=>$commit,
+                    'phase'=>(string)($deployment['phase']??'publishing'),
+                    'progress'=>(int)($deployment['progress']??0),
+                    'startedAt'=>(string)($deployment['startedAt']??''),
+                    'updatedAt'=>(string)($deployment['updatedAt']??''),
+                    'release'=>(string)($deployment['release']??''),
+                    'source'=>'agent-progress',
+                ]);
+            }
+            if($remoteState==='failed'){
+                JsonResponse::send([
+                    'ok'=>false,'state'=>'failed','reconciled'=>false,
+                    'commit'=>$commit,
+                    'phase'=>(string)($deployment['phase']??'failed'),
+                    'progress'=>(int)($deployment['progress']??100),
+                    'error'=>(string)($deployment['error']??'REMOTE_DEPLOY_FAILED'),
+                    'updatedAt'=>(string)($deployment['updatedAt']??''),
+                    'source'=>'agent-progress',
+                ]);
+            }
+        }
     } catch(Throwable $statusError) {
-        // Older agents do not know deployment-status. Fall through to the
-        // conservative release+health compatibility check below.
+        $agentStatusSupported=false;
+        // Older agents do not know deployment-status. Only those agents may use
+        // the conservative release+health compatibility check below.
+    }
+
+    if($agentStatusSupported){
+        JsonResponse::send([
+            'ok'=>true,'state'=>'pending','reconciled'=>false,
+            'commit'=>$commit,'source'=>'agent-current-wait',
+        ]);
     }
 
     $driver=new RemoteDeploymentDriver();

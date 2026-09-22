@@ -30,7 +30,8 @@ final class RemoteAgentClient
 
         $started=microtime(true);
         $timeout=match($action){
-            'deploy-commit','rollback'=>150,
+            'deploy-commit'=>300,
+            'rollback'=>180,
             'deploy-chunk'=>45,
             default=>30,
         };
