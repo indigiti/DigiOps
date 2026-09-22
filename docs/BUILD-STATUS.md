@@ -2,7 +2,7 @@
 
 ## Release
 
-**v1.8.1 — Deployment Diagnostics & State Integrity**
+**v1.8.2 — Publication Integrity**
 
 ## Control plane
 
