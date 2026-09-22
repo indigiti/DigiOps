@@ -2,7 +2,7 @@
 declare(strict_types=1);
 require_once __DIR__ . '/_bootstrap.php';
 
-@set_time_limit(90);
+@set_time_limit(20);
 header('Cache-Control: no-store, private');
 
 use DigiOps\Audit\AuditLog;
@@ -152,9 +152,17 @@ try {
             }
         }
     } catch(Throwable $statusError) {
+        if($requestId!==''){
+            JsonResponse::send([
+                'ok'=>true,'state'=>'unavailable','reconciled'=>false,
+                'commit'=>$commit,'requestId'=>$requestId,
+                'error'=>(string)$statusError->getMessage(),
+                'source'=>'agent-status-error',
+            ]);
+        }
         $agentStatusSupported=false;
-        // Older agents do not know deployment-status. Only those agents may use
-        // the conservative release+health compatibility check below.
+        // Only legacy callers without a request ID may use the conservative
+        // release+health compatibility check below.
     }
 
     if($agentStatusSupported){
