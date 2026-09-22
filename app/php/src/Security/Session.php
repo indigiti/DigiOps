@@ -12,9 +12,12 @@ final class Session
         if (session_status() === PHP_SESSION_ACTIVE) return;
         $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
         session_name('DIGIOPSSESSID');
+        $script=str_replace('\\','/',(string)($_SERVER['SCRIPT_NAME']??'/digiops/api/session.php'));
+        $cookiePath=preg_replace('#/api/[^/]+$#','/',$script);
+        if(!is_string($cookiePath) || $cookiePath==='' || $cookiePath[0]!=='/')$cookiePath='/digiops/';
         session_set_cookie_params([
             'lifetime' => 0,
-            'path' => '/',
+            'path' => $cookiePath,
             'secure' => $secure,
             'httponly' => true,
             'samesite' => 'Strict',
