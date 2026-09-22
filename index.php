@@ -66,6 +66,15 @@ function copy_tree(string $src, string $dst): void {
     }
 }
 
+function validate_digiops_private_payload(string $dir): void {
+    $allowed = ['app','agent','build'];
+    foreach (array_diff(scandir($dir) ?: [], ['.','..']) as $name) {
+        if (!in_array($name, $allowed, true)) {
+            throw new RuntimeException('DigiOps private payload contains unmanaged persistent path: ' . $name);
+        }
+    }
+}
+
 function remove_tree(string $path): void {
     if (!file_exists($path)) return;
     if (is_file($path) || is_link($path)) { @unlink($path); return; }
@@ -261,6 +270,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             }
         }
         if (!is_file($releasePrivate . '/app/php/bootstrap.php')) throw new RuntimeException('Artifact private runtime missing.');
+        validate_digiops_private_payload($releasePrivate);
 
         do_mkdir($privateRoot, 0750);
 
