@@ -56,3 +56,16 @@ The full Help & Guide page acts as the operating map for new and occasional user
 DigiOps should expose complexity progressively. The first view answers **what needs attention and what can I do next**. Exact workflow IDs, artifact IDs, commit SHAs, paths, runtime identity, and diagnostic detail remain available one level deeper.
 
 Future modules should reuse this shell and navigation model instead of introducing unrelated layouts.
+
+## Background deployment verification
+
+Deployment is a handoff, not a blocking page state.
+
+- DigiOps records the exact project, commit, workflow artifact and deployment request ID before starting.
+- The server continues deployment even if the browser request is interrupted.
+- After a short foreground handoff, a persistent browser watcher follows authoritative deployment state.
+- The watcher continues while navigating around DigiOps and resumes after reload or sign-in using browser-local persisted watch metadata.
+- When the exact request is confirmed deployed, DigiOps runs the application health check automatically.
+- The UI distinguishes **deployed + health verified**, **deployed + health needs attention**, and **deployed + health verification unavailable**.
+- A second deploy for the same application is disabled while an active deployment watch exists.
+- If the browser is completely closed, server deployment continues; verification resumes the next time DigiOps is opened.

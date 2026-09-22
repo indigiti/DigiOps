@@ -97,6 +97,8 @@ button { -webkit-tap-highlight-color: transparent; }
   .operation-icon { @apply grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-blue-600 shadow-sm ring-1 ring-slate-200; }
   .operation-track { @apply h-2.5 overflow-hidden rounded-full bg-white ring-1 ring-slate-200; }
   .operation-bar { @apply h-full rounded-full bg-blue-600 transition-all duration-500 ease-out; }
+  .deployment-watch-card { @apply flex items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50/80 px-4 py-3 shadow-sm; }
+  .deployment-watch-icon { @apply grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-blue-600 shadow-sm ring-1 ring-blue-100; }
 
   .release-head { @apply grid grid-cols-[minmax(260px,2fr)_110px_150px_minmax(190px,1.3fr)_100px_110px] items-center gap-4 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500; }
   .release-row { @apply grid grid-cols-[minmax(260px,2fr)_110px_150px_minmax(190px,1.3fr)_100px_110px] items-center gap-4 border-t border-slate-100 px-4 py-3.5 text-sm; }
