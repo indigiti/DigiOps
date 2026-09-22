@@ -20,6 +20,11 @@ final class DeploymentJobRepository
     {
         $requestId = $this->requestId((string)($job['requestId'] ?? ''));
         $project = PathGuard::slug((string)($job['project'] ?? ''));
+        $existing=$this->get($requestId);
+        if($existing){
+            if(($existing['project']??'')!==$project) throw new RuntimeException('DEPLOYMENT_REQUEST_CONFLICT');
+            return $existing;
+        }
         $now = date(DATE_ATOM);
         $record = array_merge([
             'requestId'=>$requestId,
