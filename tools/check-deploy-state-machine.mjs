@@ -5,6 +5,7 @@ const ui=read('src/main.js');
 const status=read('public/api/deploy-status.php');
 const agent=read('agent/digiops-agent.php');
 const client=read('app/php/src/Targets/RemoteAgentClient.php');
+const releaseManager=read('app/php/src/Deploy/ReleaseManager.php');
 
 const checks=[
   ['UI reconciles aborted deploys', ui.includes("aborted?'DEPLOY_RESPONSE_TIMEOUT'") && ui.includes("status.state==='deployed'")],
@@ -12,6 +13,8 @@ const checks=[
   ['UI does not hard-fail a known running deployment', ui.includes("lastState==='running'") && ui.includes('no second deploy was started')],
   ['Control plane requires authoritative modern-agent marker', status.includes('$agentStatusSupported') && status.includes("'source'=>'agent-current-wait'")],
   ['Control plane exposes remote running state', status.includes("'state'=>'running'") && status.includes("'source'=>'agent-progress'")],
+  ['Local ReleaseManager persists deployment progress', releaseManager.includes("deployment.json") && releaseManager.includes("'snapshotting'") && releaseManager.includes("'publishing'") && releaseManager.includes("'switching'")],
+  ['Control plane exposes local running and failed state', status.includes("'source'=>'local-progress'") && status.includes("'source'=>'local-progress-wait'")],
   ['Agent survives client disconnects', agent.includes('@ignore_user_abort(true)') && agent.includes('@set_time_limit(600)')],
   ['Agent persists deployment progress', agent.includes("deployment.json") && agent.includes("setDeploymentState") && agent.includes("'snapshotting'") && agent.includes("'publishing'") && agent.includes("'switching'")],
   ['Agent status returns current and deployment records', agent.includes("ok(['current'=>$current,'deployment'=>$deployment])")],
