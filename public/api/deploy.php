@@ -7,6 +7,7 @@ require_once __DIR__ . '/_bootstrap.php';
 header('Cache-Control: no-store, private');
 header('X-Accel-Buffering: no');
 
+use DigiOps\Deploy\DeploymentJobRepository;
 use DigiOps\Deploy\ReleaseManager;
 use DigiOps\Audit\AuditLog;
 use DigiOps\GitHub\GitHubClient;
@@ -22,26 +23,49 @@ use DigiOps\Targets\RemoteDeploymentDriver;
 if ($_SERVER['REQUEST_METHOD']!=='POST') JsonResponse::send(['error'=>'METHOD_NOT_ALLOWED'],405);
 $user=Session::requireRole(['admin','operator']);
 Session::assertCsrf();
-// Release the PHP session lock before long-running deployment work so
-// deploy-status and health requests can run concurrently.
 if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 $data=json_decode(file_get_contents('php://input') ?: '',true);
 if (!is_array($data)) JsonResponse::send(['error'=>'INVALID_JSON'],400);
+
+$jobs=new DeploymentJobRepository();
+$jobCreated=false;
+$requestId='';
+$projectId='';
+$target=null;
+$artifactDigest='';
 
 try {
     $projectId=(string)($data['project']??'');
     $project=(new ProjectRegistry())->find($projectId);
     if (!$project) throw new RuntimeException('PROJECT_NOT_FOUND');
-    $token=(new SecretVault())->get('github.token');
-    if (!$token) throw new RuntimeException('GITHUB_NOT_CONNECTED');
-    $client=new GitHubClient($token);
 
     $runId=(int)($data['runId']??0);
     $artifactId=(int)($data['artifactId']??0);
-    $commit=trim((string)($data['commit']??''));
+    $commit=strtolower(trim((string)($data['commit']??'')));
     $requestId=strtolower(trim((string)($data['requestId']??'')));
     if($requestId==='' || !preg_match('/^[a-f0-9]{32}$/',$requestId)) $requestId=bin2hex(random_bytes(16));
+
+    $jobs->create([
+        'requestId'=>$requestId,
+        'project'=>$projectId,
+        'projectName'=>(string)($project['name']??$projectId),
+        'targetId'=>(string)($project['targetId']??'local'),
+        'commit'=>$commit,
+        'runId'=>$runId,
+        'artifactId'=>$artifactId,
+        'requestedBy'=>(string)($user['username']??'operator'),
+        'state'=>'running',
+        'phase'=>'candidate-validation',
+        'progress'=>4,
+    ]);
+    $jobCreated=true;
+
+    $token=(new SecretVault())->get('github.token');
+    if (!$token) throw new RuntimeException('GITHUB_NOT_CONNECTED');
+    $client=new GitHubClient($token);
     $wanted=trim((string)($project['artifactName']??'digiops-release')) ?: 'digiops-release';
+    $artifact=null;
+    $run=null;
 
     if ($runId>0) {
         $run=$client->workflowRun($project['repo'],$runId);
@@ -51,7 +75,7 @@ try {
         if ((string)($run['head_branch']??'') !== (string)$project['branch']) {
             throw new RuntimeException('DEPLOY_WORKFLOW_BRANCH_MISMATCH');
         }
-        $runCommit=(string)($run['head_sha']??'');
+        $runCommit=strtolower((string)($run['head_sha']??''));
         if ($commit!=='' && $runCommit!=='' && !hash_equals($runCommit,$commit)) {
             throw new RuntimeException('DEPLOY_COMMIT_MISMATCH');
         }
@@ -76,12 +100,21 @@ try {
         if (!is_array($run) || !is_array($artifact)) throw new RuntimeException('DEPLOY_ARTIFACT_NOT_FOUND');
         $runId=(int)($run['id']??0);
         $artifactId=(int)($artifact['id']??0);
-        $commit=(string)($run['head_sha']??$commit);
+        $commit=strtolower((string)($run['head_sha']??$commit));
     }
 
-    if ($runId<=0 || $artifactId<=0 || $commit==='') throw new RuntimeException('DEPLOY_CANDIDATE_INVALID');
+    if ($runId<=0 || $artifactId<=0 || !preg_match('/^[a-f0-9]{40}$/',$commit)) throw new RuntimeException('DEPLOY_CANDIDATE_INVALID');
+    $artifactDigest=strtolower(trim((string)($artifact['digest']??'')));
+    $jobs->patch($requestId,[
+        'commit'=>$commit,
+        'runId'=>$runId,
+        'runNumber'=>(int)($run['run_number']??0),
+        'artifactId'=>$artifactId,
+        'artifactDigest'=>$artifactDigest,
+        'phase'=>'preflight',
+        'progress'=>12,
+    ]);
 
-    // Fail fast before downloading a large artifact or mutating a target.
     $targetService=new TargetService();
     $target=$targetService->forProject($projectId);
     if (($target['id']??'local')==='local') {
@@ -92,26 +125,57 @@ try {
     } else {
         $probe=$targetService->test((string)$target['id']);
         $caps=array_values(array_filter((array)($probe['capabilities']??[]),'is_string'));
-        foreach(['deploy-chunked','deployment-status','deployment-request-id'] as $requiredCapability){
+        foreach(['deploy-chunked','deployment-status','deployment-request-id','atomic-switch-v1'] as $requiredCapability){
             if(!in_array($requiredCapability,$caps,true)) throw new RuntimeException('TARGET_AGENT_UPGRADE_REQUIRED_'.$requiredCapability);
         }
     }
 
+    $jobs->patch($requestId,['state'=>'running','phase'=>'downloading-artifact','progress'=>20,'targetId'=>(string)($target['id']??'local')]);
     Files::ensureDir(DIGIOPS_PRIVATE_ROOT . '/tmp');
     $zip=DIGIOPS_PRIVATE_ROOT . '/tmp/artifact-' . bin2hex(random_bytes(6)) . '.zip';
     $client->downloadArtifact($project['repo'],$artifactId,$zip);
     $artifactBytes=filesize($zip);
     if($artifactBytes===false || $artifactBytes<1) throw new RuntimeException('ARTIFACT_DOWNLOAD_EMPTY');
+
+    $downloadSha=strtolower((string)hash_file('sha256',$zip));
+    if(str_starts_with($artifactDigest,'sha256:')){
+        $expected=substr($artifactDigest,7);
+        if(!preg_match('/^[a-f0-9]{64}$/',$expected) || !hash_equals($expected,$downloadSha)){
+            throw new RuntimeException('ARTIFACT_DIGEST_MISMATCH');
+        }
+    }
+
     if(($target['id']??'local')==='local'){
         $free=@disk_free_space(dirname(DIGIOPS_PRIVATE_ROOT));
         $minimum=max(64*1024*1024,$artifactBytes*4);
         if(is_float($free) && $free<$minimum) throw new RuntimeException('PREFLIGHT_DISK_SPACE_LOW');
     }
+
+    $jobs->patch($requestId,[
+        'phase'=>'artifact-verified',
+        'progress'=>30,
+        'artifactBytes'=>$artifactBytes,
+        'downloadSha256'=>$downloadSha,
+    ]);
+
     try {
         if (($target['id']??'local')==='local') {
-            $result=(new ReleaseManager())->deployArtifact($projectId,$zip,['commit'=>$commit,'artifactId'=>$artifactId,'requestId'=>$requestId],$user);
+            $result=(new ReleaseManager())->deployArtifact($projectId,$zip,[
+                'commit'=>$commit,
+                'artifactId'=>$artifactId,
+                'artifactDigest'=>$artifactDigest,
+                'downloadSha256'=>$downloadSha,
+                'requestId'=>$requestId,
+            ],$user);
         } else {
-            $result=(new RemoteDeploymentDriver())->deploy($projectId,$zip,$project,['commit'=>$commit,'artifactId'=>$artifactId,'requestId'=>$requestId]);
+            $jobs->patch($requestId,['state'=>'running','phase'=>'remote-upload','progress'=>34]);
+            $result=(new RemoteDeploymentDriver())->deploy($projectId,$zip,$project,[
+                'commit'=>$commit,
+                'artifactId'=>$artifactId,
+                'artifactDigest'=>$artifactDigest,
+                'downloadSha256'=>$downloadSha,
+                'requestId'=>$requestId,
+            ]);
             (new ProjectRegistry())->patchRuntime($projectId,[
                 'status'=>'deployed',
                 'health'=>'pending',
@@ -126,10 +190,39 @@ try {
                 'release'=>$result['release']??null,
                 'commit'=>$commit,
                 'artifactId'=>$artifactId,
+                'artifactDigest'=>$artifactDigest,
+                'requestId'=>$requestId,
             ],$user);
         }
-    } finally { @unlink($zip); }
+    } finally {
+        @unlink($zip);
+    }
+
+    $jobs->patch($requestId,[
+        'state'=>'deployed',
+        'phase'=>'complete',
+        'progress'=>100,
+        'release'=>(string)($result['release']??''),
+        'completedAt'=>date(DATE_ATOM),
+    ]);
     JsonResponse::send(['requestId'=>$requestId]+$result);
 } catch (Throwable $e) {
-    JsonResponse::send(['error'=>$e->getMessage()],400);
+    if($jobCreated && preg_match('/^[a-f0-9]{32}$/',$requestId)){
+        $message=$e->getMessage();
+        $ambiguous=(bool)preg_match('/TARGET_CONNECT_FAILED|HTTP_50[234]|INVALID_RESPONSE|CURLE_|TIMEOUT|Failed to fetch|NetworkError/i',$message);
+        try{
+            $jobs->patch($requestId,$ambiguous ? [
+                'state'=>'unavailable',
+                'phase'=>'authoritative-confirmation',
+                'error'=>$message,
+            ] : [
+                'state'=>'failed',
+                'phase'=>'failed',
+                'progress'=>100,
+                'error'=>$message,
+                'completedAt'=>date(DATE_ATOM),
+            ]);
+        }catch(Throwable){}
+    }
+    JsonResponse::send(['error'=>$e->getMessage(),'requestId'=>$requestId?:null],400);
 }
