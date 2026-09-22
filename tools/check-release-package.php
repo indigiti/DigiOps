@@ -44,4 +44,4 @@ if(!is_array($manifest)||($manifest['name']??'')!=='DigiOps'||empty($manifest['v
     exit(1);
 }
 
-echo "Release artifact certification: PASS".PHP_EOL;
+echo "Release artifact verification: PASS".PHP_EOL;
