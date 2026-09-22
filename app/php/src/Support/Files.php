@@ -97,11 +97,129 @@ final class Files
             \RecursiveIteratorIterator::SELF_FIRST
         );
         foreach ($it as $item) {
-            $relative = substr($item->getPathname(), strlen(rtrim($source, DIRECTORY_SEPARATOR)) + 1);
-            $dest = $target . DIRECTORY_SEPARATOR . $relative;
-            if ($item->isLink()) throw new RuntimeException('SYMLINK_NOT_ALLOWED');
-            if ($item->isDir()) self::ensureDir($dest);
-            elseif (!copy($item->getPathname(), $dest)) throw new RuntimeException('COPY_FAILED');
+            $relative = str_replace(DIRECTORY_SEPARATOR,'/',substr($item->getPathname(), strlen(rtrim($source, DIRECTORY_SEPARATOR)) + 1));
+            $dest = $target . DIRECTORY_SEPARATOR . str_replace('/',DIRECTORY_SEPARATOR,$relative);
+            if ($item->isLink()) throw new RuntimeException('SYMLINK_NOT_ALLOWED:'.$relative);
+            if ($item->isDir()) {
+                if (file_exists($dest) && !is_dir($dest)) throw new RuntimeException('COPY_TYPE_CONFLICT_EXPECTED_DIRECTORY:'.$relative);
+                self::ensureDir($dest);
+                continue;
+            }
+            if (is_dir($dest)) throw new RuntimeException('COPY_TYPE_CONFLICT_EXPECTED_FILE:'.$relative);
+            self::ensureDir(dirname($dest));
+            if (!is_readable($item->getPathname())) throw new RuntimeException('COPY_SOURCE_NOT_READABLE:'.$relative);
+            if (is_file($dest) && !is_writable($dest)) throw new RuntimeException('COPY_TARGET_FILE_NOT_WRITABLE:'.$relative);
+            if (!is_file($dest) && !is_writable(dirname($dest))) throw new RuntimeException('COPY_TARGET_DIRECTORY_NOT_WRITABLE:'.$relative);
+            if (!@copy($item->getPathname(), $dest)) {
+                $last=error_get_last();
+                $reason=is_array($last)?preg_replace('/\\s+/',' ',(string)($last['message']??'')):'';
+                throw new RuntimeException('COPY_FAILED:'.$relative.($reason!==''?':'.$reason:''));
+            }
+        }
+    }
+
+    public static function beginOverlay(string $source, string $target, string $backupRoot): array
+    {
+        if (!is_dir($source)) throw new RuntimeException('SOURCE_DIRECTORY_MISSING');
+        $parent=dirname($target);
+        if (!is_dir($target) && (!is_dir($parent) || !is_writable($parent))) {
+            throw new RuntimeException('OVERLAY_TARGET_PARENT_NOT_WRITABLE');
+        }
+        if (is_dir($target) && !is_writable($target)) throw new RuntimeException('OVERLAY_TARGET_NOT_WRITABLE');
+
+        if (file_exists($backupRoot)) self::removeTree($backupRoot);
+        self::ensureDir($backupRoot,0700);
+
+        $existingFiles=[];
+        $newFiles=[];
+        $newDirs=[];
+        $it = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($source, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::SELF_FIRST
+        );
+        foreach ($it as $item) {
+            $relative=str_replace(DIRECTORY_SEPARATOR,'/',substr($item->getPathname(), strlen(rtrim($source, DIRECTORY_SEPARATOR)) + 1));
+            $dest=$target . DIRECTORY_SEPARATOR . str_replace('/',DIRECTORY_SEPARATOR,$relative);
+            if ($item->isLink()) throw new RuntimeException('SYMLINK_NOT_ALLOWED:'.$relative);
+
+            if ($item->isDir()) {
+                if (file_exists($dest) && !is_dir($dest)) throw new RuntimeException('OVERLAY_TYPE_CONFLICT_EXPECTED_DIRECTORY:'.$relative);
+                if (!file_exists($dest)) $newDirs[]=$relative;
+                continue;
+            }
+
+            if (is_dir($dest)) throw new RuntimeException('OVERLAY_TYPE_CONFLICT_EXPECTED_FILE:'.$relative);
+            if (!is_readable($item->getPathname())) throw new RuntimeException('OVERLAY_SOURCE_NOT_READABLE:'.$relative);
+
+            if (is_file($dest)) {
+                if (!is_readable($dest)) throw new RuntimeException('OVERLAY_EXISTING_FILE_NOT_READABLE:'.$relative);
+                if (!is_writable($dest)) throw new RuntimeException('OVERLAY_EXISTING_FILE_NOT_WRITABLE:'.$relative);
+                $backup=$backupRoot . DIRECTORY_SEPARATOR . str_replace('/',DIRECTORY_SEPARATOR,$relative);
+                self::ensureDir(dirname($backup),0700);
+                if (!@copy($dest,$backup)) throw new RuntimeException('OVERLAY_BACKUP_FAILED:'.$relative);
+                $existingFiles[]=$relative;
+            } else {
+                $probe=dirname($dest);
+                while(!is_dir($probe) && $probe!==dirname($probe)) $probe=dirname($probe);
+                if (!is_dir($probe) || !is_writable($probe)) throw new RuntimeException('OVERLAY_TARGET_DIRECTORY_NOT_WRITABLE:'.$relative);
+                $newFiles[]=$relative;
+            }
+        }
+
+        return [
+            'source'=>$source,
+            'target'=>$target,
+            'backupRoot'=>$backupRoot,
+            'existingFiles'=>$existingFiles,
+            'newFiles'=>$newFiles,
+            'newDirs'=>$newDirs,
+        ];
+    }
+
+    public static function applyOverlay(array $plan): void
+    {
+        try {
+            self::copyDir((string)$plan['source'],(string)$plan['target']);
+        } catch (\Throwable $e) {
+            try { self::rollbackOverlay($plan); }
+            catch (\Throwable $restore) {
+                throw new RuntimeException('OVERLAY_APPLY_FAILED_RESTORE_FAILED:'.$e->getMessage().':'.$restore->getMessage(),0,$e);
+            }
+            throw $e;
+        }
+    }
+
+    public static function rollbackOverlay(array $plan): void
+    {
+        $target=(string)($plan['target']??'');
+        $backupRoot=(string)($plan['backupRoot']??'');
+
+        foreach (array_reverse((array)($plan['newFiles']??[])) as $relative) {
+            $dest=$target . DIRECTORY_SEPARATOR . str_replace('/',DIRECTORY_SEPARATOR,(string)$relative);
+            if (is_file($dest) || is_link($dest)) @unlink($dest);
+        }
+
+        foreach ((array)($plan['existingFiles']??[]) as $relative) {
+            $backup=$backupRoot . DIRECTORY_SEPARATOR . str_replace('/',DIRECTORY_SEPARATOR,(string)$relative);
+            $dest=$target . DIRECTORY_SEPARATOR . str_replace('/',DIRECTORY_SEPARATOR,(string)$relative);
+            if (!is_file($backup)) throw new RuntimeException('OVERLAY_RESTORE_BACKUP_MISSING:'.$relative);
+            self::ensureDir(dirname($dest));
+            if (!@copy($backup,$dest)) throw new RuntimeException('OVERLAY_RESTORE_FAILED:'.$relative);
+        }
+
+        foreach (array_reverse((array)($plan['newDirs']??[])) as $relative) {
+            $dest=$target . DIRECTORY_SEPARATOR . str_replace('/',DIRECTORY_SEPARATOR,(string)$relative);
+            if (is_dir($dest)) @rmdir($dest);
+        }
+
+        if ($backupRoot!=='' && file_exists($backupRoot)) self::removeTree($backupRoot);
+    }
+
+    public static function commitOverlay(array $plan): void
+    {
+        $backupRoot=(string)($plan['backupRoot']??'');
+        if ($backupRoot!=='' && file_exists($backupRoot)) {
+            try { self::removeTree($backupRoot); } catch (\Throwable) {}
         }
     }
 
