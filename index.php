@@ -14,8 +14,9 @@ declare(strict_types=1);
 session_name('DIGIOPSBOOTSTRAP');
 session_start();
 
-const DIGIOPS_CERTIFIED_ARTIFACT_ID = 10678642457;
-const DIGIOPS_CERTIFIED_SOURCE_SHA = '24b932632d4b4494e6767b6b71346cadf673a6cd';
+const DIGIOPS_CERTIFIED_ARTIFACT_ID = 10688758699;
+const DIGIOPS_CERTIFIED_SOURCE_SHA = 'd1bbc4b92d763c07026cc6617994e27d54283d37';
+const DIGIOPS_CERTIFIED_ARTIFACT_DIGEST = 'sha256:b83c2a2d67a34191ddc7ce77b0ba1646dc01fb8905dff2867e1301e05b718987';
 
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
@@ -223,6 +224,16 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             $token,
             $zipFile
         );
+
+        $expectedDigest = strtolower((string)DIGIOPS_CERTIFIED_ARTIFACT_DIGEST);
+        if (str_starts_with($expectedDigest, 'sha256:')) {
+            $expectedSha = substr($expectedDigest, 7);
+            $actualSha = strtolower((string)hash_file('sha256', $zipFile));
+            if (!preg_match('/^[a-f0-9]{64}$/', $expectedSha) || !hash_equals($expectedSha, $actualSha)) {
+                @unlink($zipFile);
+                throw new RuntimeException('Certified artifact digest mismatch.');
+            }
+        }
 
         $zip = new ZipArchive();
         if ($zip->open($zipFile) !== true) throw new RuntimeException('Downloaded artifact is not a valid ZIP.');
