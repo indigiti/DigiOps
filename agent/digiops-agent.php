@@ -5,7 +5,7 @@ declare(strict_types=1);
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, private');
 header('X-Content-Type-Options: nosniff');
-const AGENT_VERSION='1.3.0';
+const AGENT_VERSION='1.4.0';
 const MAX_SKEW=300;
 const MAX_CHUNK=786432;
 function fail(string $error,int $status=400): never {
@@ -117,7 +117,7 @@ function publishRelease(array $payload,string $zipFile): array {
 }
 $raw=(string)file_get_contents('php://input');verifySignature($raw);$data=json_decode($raw,true);if(!is_array($data))fail('INVALID_JSON');$action=(string)($data['action']??'');$payload=is_array($data['payload']??null)?$data['payload']:[];
 try{
-    if($action==='ping')ok(['agentVersion'=>AGENT_VERSION,'capabilities'=>['health','releases','deployment-status','files','deploy-chunked','rollback'],'runtime'=>['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip')],'server'=>php_uname('n')]);
+    if($action==='ping')ok(['agentVersion'=>AGENT_VERSION,'capabilities'=>['health','releases','deployment-status','deployment-request-id','files','deploy-chunked','rollback'],'runtime'=>['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip')],'server'=>php_uname('n')]);
     if($action==='health'){[$slug,$public,$private]=projectPaths($payload);$url=trim((string)($payload['url']??''));$healthPath=(string)($payload['healthPath']??'/');$http=['ok'=>false,'status'=>null,'ms'=>null];if($url!==''&&function_exists('curl_init')){$probe=rtrim($url,'/').'/'.ltrim($healthPath,'/');$start=microtime(true);$ch=curl_init($probe);curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_NOBODY=>true,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_TIMEOUT=>8,CURLOPT_CONNECTTIMEOUT=>4]);curl_exec($ch);$status=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);curl_close($ch);$http=['ok'=>$status>=200&&$status<400,'status'=>$status,'ms'=>(int)((microtime(true)-$start)*1000)];}$storage=['exists'=>is_dir($public),'bytes'=>dirSize($public),'writable'=>is_dir(dirname($public))&&is_writable(dirname($public))];$runtime=['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip'),'sodium'=>extension_loaded('sodium')];ok(['http'=>$http,'storage'=>$storage,'runtime'=>$runtime,'checkedAt'=>date(DATE_ATOM)]);}
     if($action==='releases'){$slug=safeSlug((string)($payload['project']??''));ok(['releases'=>listReleases($slug)]);}
     if($action==='deployment-status'){$slug=safeSlug((string)($payload['project']??''));$current=readJsonFile(projectRuntime($slug).'/current.json',[]);$deployment=deploymentState($slug);ok(['current'=>$current,'deployment'=>$deployment]);}
