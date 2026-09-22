@@ -86,7 +86,7 @@ final class TargetRegistry
 
     private function allUnlocked(): array
     {
-        $saved = Files::readJson($this->file, []);
+        $saved = Files::readJsonStrict($this->file, []);
         $targets = [[
             'id'=>'local',
             'name'=>'This Cloudways application',
