@@ -20,11 +20,6 @@ final class DeploymentJobRepository
     {
         $requestId = $this->requestId((string)($job['requestId'] ?? ''));
         $project = PathGuard::slug((string)($job['project'] ?? ''));
-        $existing=$this->get($requestId);
-        if($existing){
-            if(($existing['project']??'')!==$project) throw new RuntimeException('DEPLOYMENT_REQUEST_CONFLICT');
-            return $existing;
-        }
         $now = date(DATE_ATOM);
         $record = array_merge([
             'requestId'=>$requestId,
@@ -51,8 +46,14 @@ final class DeploymentJobRepository
         $record['requestId']=$requestId;
         $record['project']=$project;
         $record['updatedAt']=$now;
-        Files::writeJson($this->file($requestId), $record);
-        return $record;
+        $file=$this->file($requestId);
+        return Files::mutateJson($file, [], static function(array $existing) use ($record,$project): array {
+            if($existing){
+                if(($existing['project']??'')!==$project) throw new RuntimeException('DEPLOYMENT_REQUEST_CONFLICT');
+                return $existing;
+            }
+            return $record;
+        });
     }
 
     public function patch(string $requestId, array $patch): array
