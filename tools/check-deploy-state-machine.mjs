@@ -23,6 +23,8 @@ const checks=[
   ['Deploy endpoint creates durable job before long work', deploy.includes("$jobs->create") && deploy.includes("'phase'=>'candidate-validation'")],
   ['Deploy status persists authoritative state into job journal', status.includes('DeploymentJobRepository') && status.includes("$jobs->patch")],
   ['Post-deploy health is attached to deployment job', health.includes('DeploymentJobRepository') && health.includes("'health-verified'") && health.includes("'health-attention'")],
+  ['Detailed health state persists across reloads', health.includes("'healthDetail'=>$result") && ui.includes('selectedHealthUrl') && ui.includes('selectedHealthCheckedAt')],
+  ['Health UI exposes an explicit fresh check action', ui.includes("@click=\"checkHealth(false)\"") && ui.includes('Resolved health URL')],
   ['Direct deploy health keeps request identity', ui.includes('checkHealth(true,requestId)') && ui.includes('healthPayload.requestId=requestId')],
   ['Only uncertain remote commit responses enter authoritative confirmation', deploy.includes("str_starts_with($message,'REMOTE_COMMIT_UNCERTAIN_')") && ui.includes("payload.state==='unavailable'")],
   ['Remote agent independently enforces Cloudways roots', agent.includes('safeManagedRelative') && agent.includes("'public_html'") && agent.includes("'private_html'")],
