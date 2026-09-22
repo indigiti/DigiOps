@@ -57,6 +57,7 @@ try {
         'state'=>'running',
         'phase'=>'candidate-validation',
         'progress'=>4,
+        'verificationSource'=>'github-candidate',
     ]);
     $jobCreated=true;
 
@@ -113,6 +114,7 @@ try {
         'artifactDigest'=>$artifactDigest,
         'phase'=>'preflight',
         'progress'=>12,
+        'verificationSource'=>'control-plane-preflight',
     ]);
 
     $targetService=new TargetService();
@@ -130,7 +132,7 @@ try {
         }
     }
 
-    $jobs->patch($requestId,['state'=>'running','phase'=>'downloading-artifact','progress'=>20,'targetId'=>(string)($target['id']??'local')]);
+    $jobs->patch($requestId,['state'=>'running','phase'=>'downloading-artifact','progress'=>20,'targetId'=>(string)($target['id']??'local'),'verificationSource'=>'github-artifact']);
     Files::ensureDir(DIGIOPS_PRIVATE_ROOT . '/tmp');
     $zip=DIGIOPS_PRIVATE_ROOT . '/tmp/artifact-' . bin2hex(random_bytes(6)) . '.zip';
     $client->downloadArtifact($project['repo'],$artifactId,$zip);
@@ -156,6 +158,7 @@ try {
         'progress'=>30,
         'artifactBytes'=>$artifactBytes,
         'downloadSha256'=>$downloadSha,
+        'verificationSource'=>'sha256-integrity',
     ]);
 
     try {
@@ -168,7 +171,7 @@ try {
                 'requestId'=>$requestId,
             ],$user);
         } else {
-            $jobs->patch($requestId,['state'=>'running','phase'=>'remote-upload','progress'=>34]);
+            $jobs->patch($requestId,['state'=>'running','phase'=>'remote-upload','progress'=>34,'verificationSource'=>'remote-target']);
             $result=(new RemoteDeploymentDriver())->deploy($projectId,$zip,$project,[
                 'commit'=>$commit,
                 'artifactId'=>$artifactId,
@@ -204,6 +207,7 @@ try {
         'progress'=>100,
         'release'=>(string)($result['release']??''),
         'completedAt'=>date(DATE_ATOM),
+        'verificationSource'=>(($target['id']??'local')==='local'?'local-target':'remote-target'),
     ]);
     JsonResponse::send(['requestId'=>$requestId]+$result);
 } catch (Throwable $e) {
@@ -211,16 +215,20 @@ try {
         $message=$e->getMessage();
         $ambiguous=(bool)preg_match('/TARGET_CONNECT_FAILED|HTTP_50[234]|INVALID_RESPONSE|CURLE_|TIMEOUT|Failed to fetch|NetworkError/i',$message);
         try{
+            $currentJob=$jobs->get($requestId);
+            $failurePhase=(string)($currentJob['phase']??'failed');
             $jobs->patch($requestId,$ambiguous ? [
                 'state'=>'unavailable',
                 'phase'=>'authoritative-confirmation',
                 'error'=>$message,
+                'verificationSource'=>'deploy-response',
             ] : [
                 'state'=>'failed',
-                'phase'=>'failed',
+                'phase'=>$failurePhase!==''?$failurePhase:'failed',
                 'progress'=>100,
                 'error'=>$message,
                 'completedAt'=>date(DATE_ATOM),
+                'verificationSource'=>'deploy-api',
             ]);
         }catch(Throwable){}
     }
