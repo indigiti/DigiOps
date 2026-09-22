@@ -868,6 +868,15 @@ function app(){
         const aborted=e && e.name==='AbortError'
         const transportError=aborted?'DEPLOY_RESPONSE_TIMEOUT':e.message
         const payload=e&&e.payload&&typeof e.payload==='object'?e.payload:null
+        if(transportError==='DEPLOYMENT_ALREADY_ACTIVE' && payload&&payload.requestId){
+          this.clearDeploymentWatch(requestId)
+          await this.syncDeploymentWatches()
+          this.verificationJobId=String(payload.requestId)
+          this.error=''
+          this.notice='Another deployment is already active. Open Verification to follow the existing request before retrying.'
+          this.completeOperation('Existing deployment is still active; duplicate deployment was blocked safely.')
+          return
+        }
         const serverUnavailable=payload&&payload.state==='unavailable'
         const networkFailure=!e.httpStatus && /Failed to fetch|NetworkError|Load failed/i.test(transportError)
         const ambiguous=aborted || networkFailure || serverUnavailable
