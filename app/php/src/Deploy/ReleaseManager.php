@@ -17,6 +17,30 @@ final class ReleaseManager
         private AuditLog $audit = new AuditLog()
     ) {}
 
+    public function deploymentState(string $projectId): array
+    {
+        $slug=PathGuard::slug($projectId);
+        return Files::readJson(DIGIOPS_PRIVATE_ROOT . '/projects/' . $slug . '/deployment.json', []);
+    }
+
+    private function writeDeploymentState(string $slug,string $state,string $phase,int $progress,array $extra=[]): void
+    {
+        $file=DIGIOPS_PRIVATE_ROOT . '/projects/' . $slug . '/deployment.json';
+        $previous=Files::readJson($file, []);
+        $now=date(DATE_ATOM);
+        $payload=[
+            'state'=>$state,
+            'phase'=>$phase,
+            'progress'=>max(0,min(100,$progress)),
+            'startedAt'=>(string)($extra['startedAt']??($previous['startedAt']??$now)),
+            'updatedAt'=>$now,
+            'commit'=>(string)($extra['commit']??($previous['commit']??'')),
+            'artifactId'=>(string)($extra['artifactId']??($previous['artifactId']??'')),
+        ];
+        foreach($extra as $k=>$v)$payload[$k]=$v;
+        Files::writeJson($file,$payload);
+    }
+
     public function deployArtifact(string $projectId, string $zipFile, array $meta, array $user): array
     {
         $project = $this->projects->find($projectId);
@@ -31,6 +55,8 @@ final class ReleaseManager
         if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) throw new RuntimeException('DEPLOYMENT_LOCKED');
 
         try {
+            $stateMeta=['commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??'')];
+            $this->writeDeploymentState($slug,'running','validating',38,$stateMeta+['startedAt'=>date(DATE_ATOM)]);
             $releaseId = date('Ymd-His') . '-' . substr((string)($meta['commit'] ?? bin2hex(random_bytes(4))), 0, 8);
             $stage = $runtime . '/staging/' . $releaseId;
             $releases = $runtime . '/releases';
@@ -44,6 +70,7 @@ final class ReleaseManager
             [$publicPayload, $privatePayload] = $this->detectPayloads($stage);
             $this->validatePayload($publicPayload);
 
+            $this->writeDeploymentState($slug,'running','snapshotting',52,$stateMeta+['release'=>$releaseId]);
             if (is_dir($publicTarget) && $this->hasEntries($publicTarget)) {
                 $backupId = 'pre-' . $releaseId;
                 $backupDir = $releases . '/' . $backupId;
@@ -56,6 +83,7 @@ final class ReleaseManager
                 ]);
             }
 
+            $this->writeDeploymentState($slug,'running','staging-release',68,$stateMeta+['release'=>$releaseId]);
             if (is_dir($releaseDir)) Files::removeTree($releaseDir);
             Files::ensureDir($releaseDir);
             Files::copyDir($publicPayload, $releaseDir . '/public');
@@ -72,6 +100,7 @@ final class ReleaseManager
                 'splitPrivate'=>$privatePayload !== null,
             ]);
 
+            $this->writeDeploymentState($slug,'running','publishing',82,$stateMeta+['release'=>$releaseId]);
             $publishTmp = dirname($publicTarget) . '/.' . $slug . '.publish-' . bin2hex(random_bytes(4));
             Files::copyDir($releaseDir . '/public', $publishTmp);
 
@@ -82,6 +111,7 @@ final class ReleaseManager
                 Files::copyDir($releaseDir . '/private', $privateTarget);
             }
 
+            $this->writeDeploymentState($slug,'running','switching',94,$stateMeta+['release'=>$releaseId]);
             if (is_dir($publicTarget)) Files::removeTree($publicTarget);
             if (!rename($publishTmp, $publicTarget)) throw new RuntimeException('PUBLISH_RENAME_FAILED');
 
@@ -93,6 +123,7 @@ final class ReleaseManager
                 'lastDeploy'=>date(DATE_ATOM),
                 'update'=>false,
             ]);
+            $this->writeDeploymentState($slug,'deployed','complete',100,$stateMeta+['release'=>$releaseId,'lastDeploy'=>date(DATE_ATOM)]);
             $this->prune($slug, (int)$project['retention']);
             $this->audit->write('DEPLOY_SUCCESS', [
                 'project'=>$slug,
@@ -106,6 +137,13 @@ final class ReleaseManager
                 'publicPath'=>$project['publicPath'],
                 'privatePath'=>$privatePayload !== null ? $project['privatePath'] : null,
             ];
+        } catch (\Throwable $e) {
+            $this->writeDeploymentState($slug,'failed','failed',100,[
+                'commit'=>(string)($meta['commit']??''),
+                'artifactId'=>(string)($meta['artifactId']??''),
+                'error'=>$e->getMessage(),
+            ]);
+            throw $e;
         } finally {
             flock($lock, LOCK_UN);
             fclose($lock);
