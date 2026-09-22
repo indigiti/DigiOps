@@ -8,7 +8,6 @@ const icons=()=>queueMicrotask(()=>createIcons({icons:ICONS}))
 const APP_BASE=(import.meta.env.BASE_URL||'/digiops/').replace(/\/+$/,'')+'/'
 const appUrl=(path='')=>APP_BASE+String(path||'').replace(/^\/+/,'')
 const deploymentRequestId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('')
-const DEPLOYMENT_WATCH_KEY='digiops.deployment-watches.v1'
 
 const HELP_TOPICS={
   dashboard:{title:'Command Center',intro:'A last-known operational summary. Opening this page does not fan out to GitHub or remote targets.',items:['Attention shows applications that need review.','Updates are known deployable builds detected during an explicit update check.','Pending means health has not been verified yet.','Use Deployment Center for release activity and Health & Readiness for fleet condition.']},
@@ -308,7 +307,7 @@ function app(){
     get rollingBack(){return this.operation.active && this.operation.type==='rollback'},
     get checkingHealth(){return this.operation.active && this.operation.type==='health'},
     get operationWidth(){return 'width:'+Math.max(0,Math.min(100,Number(this.operation.percent)||0))+'%'},
-    get operationPercentLabel(){return Math.round(Number(this.operation.percent)||0)+'%'},
+    get operationPercentLabel(){return this.operation.type==='deploy'?'Phase':Math.round(Number(this.operation.percent)||0)+'%'},
     get operationTone(){return this.operation.status==='error'?'operation-error':this.operation.status==='success'?'operation-success':'operation-running'},
     get operationStatusLabel(){return this.operation.status==='error'?'Failed':this.operation.status==='success'?'Completed':this.operation.estimated?'Estimated progress':'In progress'},
     get noticeTone(){return /attention|warning|needs/i.test(this.notice)?'notice-warning':'notice-success'},
@@ -336,31 +335,52 @@ function app(){
     releaseCreated(r){return this.formatDate(r && r.createdAt ? r.createdAt : '')},
     releaseSize(r){return this.formatBytes(r && r.size ? r.size : 0)},
     isCurrentRelease(r){return !!(r && this.selected && String(r.id||'')===String(this.selected.release||''))},
-    persistDeploymentWatches(){
-      try{localStorage.setItem(DEPLOYMENT_WATCH_KEY,JSON.stringify(this.activeDeploymentWatches))}
-      catch{}
+    deploymentWatchFromJob(job){
+      return {
+        projectId:job.project,
+        projectName:job.projectName||job.project,
+        commit:job.commit||'',
+        requestId:job.requestId||'',
+        run:job.runNumber?('#'+job.runNumber):(job.runId?('run '+job.runId):'build'),
+        artifact:job.artifactId||'—',
+        status:job.state||'pending',
+        phase:job.phase||'pending',
+        progress:Number(job.progress)||0,
+        startedAt:job.startedAt||job.createdAt||new Date().toISOString(),
+        lastCheckedAt:job.updatedAt||''
+      }
     },
-    loadDeploymentWatches(){
+    async syncDeploymentWatches(){
       try{
-        const raw=JSON.parse(localStorage.getItem(DEPLOYMENT_WATCH_KEY)||'[]')
-        this.deploymentWatches=Array.isArray(raw)?raw.filter(w=>w&&w.projectId&&w.commit&&w.requestId):[]
-      }catch{this.deploymentWatches=[]}
+        const d=await api('./api/deployment-jobs.php')
+        const server=(d.active||[]).map(job=>this.deploymentWatchFromJob(job))
+        const serverIds=new Set(server.map(w=>w.requestId))
+        const now=Date.now()
+        const justStarted=this.deploymentWatches.filter(w=>{
+          if(serverIds.has(w.requestId))return false
+          if(!['queued','pending','running','unavailable'].includes(w.status))return false
+          const started=new Date(w.startedAt||0).getTime()
+          return Number.isFinite(started) && now-started<30000
+        })
+        this.deploymentWatches=[...server,...justStarted]
+        return true
+      }catch{
+        return false
+      }
     },
     queueDeploymentWatch(watch){
       const next={...watch,status:watch.status||'queued',phase:watch.phase||'starting',progress:Number(watch.progress)||0,startedAt:watch.startedAt||new Date().toISOString(),lastCheckedAt:''}
       this.deploymentWatches=this.deploymentWatches.filter(w=>w.requestId!==next.requestId&&w.projectId!==next.projectId)
       this.deploymentWatches.push(next)
-      this.persistDeploymentWatches()
       this.startDeploymentWatchLoop()
-      queueMicrotask(()=>this.verifyDeploymentWatches())
+      setTimeout(()=>this.verifyDeploymentWatches(),800)
     },
     clearDeploymentWatch(requestId){
       this.deploymentWatches=this.deploymentWatches.filter(w=>w.requestId!==requestId)
-      this.persistDeploymentWatches()
       if(!this.activeDeploymentWatches.length)this.stopDeploymentWatchLoop()
     },
-    resumeDeploymentWatches(){
-      this.loadDeploymentWatches()
+    async resumeDeploymentWatches(){
+      await this.syncDeploymentWatches()
       if(this.activeDeploymentWatches.length){
         this.startDeploymentWatchLoop()
         queueMicrotask(()=>this.verifyDeploymentWatches())
@@ -374,16 +394,12 @@ function app(){
       if(this.deploymentWatchTimer){clearInterval(this.deploymentWatchTimer);this.deploymentWatchTimer=null}
     },
     async verifyDeploymentWatches(){
-      if(this.deploymentWatchBusy||!this.user||!this.csrf||!this.activeDeploymentWatches.length)return
+      if(this.deploymentWatchBusy||!this.user||!this.csrf)return
       this.deploymentWatchBusy=true
       try{
+        await this.syncDeploymentWatches()
+        if(!this.activeDeploymentWatches.length){this.stopDeploymentWatchLoop();return}
         for(const watch of [...this.activeDeploymentWatches]){
-          const age=Date.now()-new Date(watch.startedAt).getTime()
-          if(Number.isFinite(age)&&age>30*60*1000){
-            watch.status='attention';watch.phase='verification-window-expired';watch.lastCheckedAt=new Date().toISOString()
-            this.error=(watch.projectName||watch.projectId)+' deployment verification exceeded 30 minutes. Open the application and run Check update before retrying.'
-            continue
-          }
           try{
             const status=await apiTimed('./api/deploy-status.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:watch.projectId,commit:watch.commit,requestId:watch.requestId})},8000)
             watch.lastCheckedAt=new Date().toISOString()
@@ -420,7 +436,6 @@ function app(){
             watch.lastCheckedAt=new Date().toISOString()
           }
         }
-        this.persistDeploymentWatches()
       }finally{
         this.deploymentWatchBusy=false
         icons()
@@ -428,10 +443,9 @@ function app(){
     },
     deploymentWatchLabel(watch){
       if(!watch)return ''
-      if(watch.status==='running')return (watch.phase||'running').replace(/[-_]+/g,' ')+' · '+(watch.progress||0)+'%'
+      if(watch.status==='running')return (watch.phase||'running').replace(/[-_]+/g,' ')+' in progress'
       if(watch.status==='unavailable')return 'confirmation channel retrying'
       if(watch.status==='pending'||watch.status==='queued')return 'awaiting authoritative confirmation'
-      if(watch.status==='attention')return 'verification needs review'
       return watch.status
     },
     startOperation(type,title,message,percent=5,estimated=false){
