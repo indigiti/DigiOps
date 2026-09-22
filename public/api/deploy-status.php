@@ -52,7 +52,9 @@ try {
 
     // New agents expose current.json, which is written only after the public
     // directory has been atomically published. This is authoritative evidence.
+    $agentStatusSupported=false;
     try {
+        $agentStatusSupported=true;
         $remote=$targets->remoteRequest($projectId,'deployment-status',['project'=>$projectId]);
         $current=is_array($remote['current']??null)?$remote['current']:[];
         $currentCommit=strtolower(trim((string)($current['commit']??'')));
@@ -105,8 +107,16 @@ try {
             }
         }
     } catch(Throwable $statusError) {
-        // Older agents do not know deployment-status. Fall through to the
-        // conservative release+health compatibility check below.
+        $agentStatusSupported=false;
+        // Older agents do not know deployment-status. Only those agents may use
+        // the conservative release+health compatibility check below.
+    }
+
+    if($agentStatusSupported){
+        JsonResponse::send([
+            'ok'=>true,'state'=>'pending','reconciled'=>false,
+            'commit'=>$commit,'source'=>'agent-current-wait',
+        ]);
     }
 
     $driver=new RemoteDeploymentDriver();
