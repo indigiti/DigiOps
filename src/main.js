@@ -76,6 +76,7 @@ function app(){
     infra:null, runtimeInfo:null, redisStatus:null,
     redisMode:'cloudways',
     redisAdvanced:false,
+    originForm:{applicationOrigin:''},
     redisForm:{host:'127.0.0.1',port:6379,username:'',password:'',database:0,prefix:'digiops:',timeout:1.5},
     varnishForm:{enabled:true,bypassPath:'/digiops/',sessionCookie:'DIGIOPSSESSID',apiPath:'/digiops/api/'},
     targetForm:{id:'',name:'',type:'agent',endpoint:'',secret:'',publicBase:'public_html',privateBase:'private_html'},
@@ -1014,6 +1015,7 @@ function app(){
       try{
         const d=await api('./api/infrastructure.php')
         this.infra=d
+        this.originForm.applicationOrigin=(d.applicationOrigin||window.location.origin||'').replace(/\/+$/,'')
         Object.assign(this.redisForm,{
           host:d.redis&&d.redis.host?d.redis.host:'127.0.0.1',
           port:d.redis&&d.redis.port?d.redis.port:6379,
@@ -1026,6 +1028,18 @@ function app(){
         if(d.varnish)Object.assign(this.varnishForm,d.varnish)
       }catch(e){this.error=e.message}
       icons()
+    },
+    async saveApplicationOrigin(){
+      if(this.userRole!=='admin')return
+      this.clearMessages();this.busy=true
+      try{
+        const d=await api('./api/infrastructure.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({action:'origin-save',applicationOrigin:this.originForm.applicationOrigin})})
+        this.originForm.applicationOrigin=d.applicationOrigin||this.originForm.applicationOrigin
+        if(!this.infra)this.infra={}
+        this.infra.applicationOrigin=this.originForm.applicationOrigin
+        this.notice='Application origin saved. Local health URLs now use this trusted origin.'
+      }catch(e){this.error=e.message}
+      finally{this.busy=false;icons()}
     },
     async testRedis(save=false){
       if(this.userRole!=='admin')return
@@ -1587,6 +1601,18 @@ document.querySelector('#app').innerHTML=`
 
         <section x-show="page==='settings'" class="space-y-5">
           <div><p class="text-sm font-medium text-blue-600">Connections & infrastructure</p><h1 class="mt-1 text-2xl font-bold">Settings</h1><p class="muted mt-1">Manage external services and verify the runtime environment from one place.</p></div>
+
+          <div class="panel">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div><p class="text-sm font-medium text-emerald-600">Application routing</p><h2 class="mt-1 text-xl font-bold">Application origin</h2><p class="muted mt-2">Trusted base origin used for local application health checks. Configure this once; DigiOps combines it with each application slug and health path.</p></div>
+              <span class="pill" :class="infra&&infra.applicationOrigin?'border-emerald-200 bg-emerald-50 text-emerald-700':'border-amber-200 bg-amber-50 text-amber-800'"><span class="status-dot" :class="infra&&infra.applicationOrigin?'bg-emerald-500':'bg-amber-500'"></span><span x-text="infra&&infra.applicationOrigin?'Configured':'Required'"></span></span>
+            </div>
+            <div class="mt-5 flex flex-col gap-3 sm:flex-row">
+              <input x-model="originForm.applicationOrigin" placeholder="https://stage.digiti.in" class="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2.5" :disabled="userRole!=='admin'">
+              <button @click="saveApplicationOrigin()" class="btn btn-primary" :disabled="busy||userRole!=='admin'"><i data-lucide="shield-check" class="h-4 w-4"></i>Save origin</button>
+            </div>
+            <div class="mt-3 rounded-2xl bg-slate-50 px-4 py-3 text-xs text-slate-600">Example: <code>https://stage.digiti.in</code> + app <code>qsyn</code> + health path <code>/</code> → <code>https://stage.digiti.in/qsyn/</code>.</div>
+          </div>
 
           <div class="grid gap-5 xl:grid-cols-2">
             <div class="panel">
