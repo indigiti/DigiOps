@@ -28,9 +28,11 @@ final class UserStore
         if (strlen($password) < 12) throw new InvalidArgumentException('PASSWORD_TOO_SHORT');
         if (!in_array($role, ['admin','operator','viewer'], true)) throw new InvalidArgumentException('INVALID_ROLE');
 
+        foreach(Files::readJson($this->file,[]) as $existing){
+            if(($existing['username']??'')===$username) throw new RuntimeException('USER_EXISTS');
+        }
         $id=bin2hex(random_bytes(8));
         $normalizedTotp=$totpSecret ? strtoupper((string)preg_replace('/[^A-Z2-7]/', '', $totpSecret)) : '';
-        if($normalizedTotp!=='') (new SecretVault())->put('user.'.$id.'.totp',$normalizedTotp);
 
         $record = [
             'id' => $id,
@@ -42,6 +44,8 @@ final class UserStore
             'enabled' => true,
             'createdAt' => date(DATE_ATOM),
         ];
+
+        if($normalizedTotp!=='') (new SecretVault())->put('user.'.$id.'.totp',$normalizedTotp);
 
         Files::withLock($this->file.'.lock', function() use ($record,$username): void {
             $users=Files::readJson($this->file,[]);
