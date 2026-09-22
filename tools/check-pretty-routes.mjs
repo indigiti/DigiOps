@@ -11,7 +11,14 @@ const required=[
   "RewriteRule ^ index.html [L]",
   "routeFor(page,id='',tab='overview')",
   "window.addEventListener('popstate'",
-  "apps/'+encodeURIComponent(id)"
+  "apps/'+encodeURIComponent(id)",
+  "if(page==='deployments')return 'deployments'",
+  "if(page==='health-center')return 'health'",
+  "if(page==='guide')return 'guide'",
+  "Deployment Center",
+  "Health & Readiness",
+  "Help & Guide",
+  "help-drawer"
 ]
 
 const corpus=vite+'\n'+htaccess+'\n'+main
