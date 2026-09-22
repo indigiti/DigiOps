@@ -2,7 +2,7 @@
 
 ## Release
 
-**v1.8.2 — Publication Integrity**
+**v1.8.3 — Artifact Download Resilience**
 
 ## Control plane
 
@@ -24,6 +24,8 @@
 - [x] Pre-deploy snapshot
 - [x] Transactional public-directory switch
 - [x] Private overlay preflight, exact copy-path diagnostics, and rollback on pre-cutover publication failure
+- [x] 600-second artifact transfer window with bounded retries for transient cURL failures
+- [x] Artifact downloads remain in temporary `.part` files until ZIP/digest validation passes
 - [x] Automatic restoration if final cutover rename fails
 - [x] Same transactional switch on remote agent
 - [x] Remote capability gate for transactional publication
