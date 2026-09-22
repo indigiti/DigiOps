@@ -25,6 +25,7 @@ const checks=[
   ['Direct deploy health keeps request identity', ui.includes('checkHealth(true,requestId)') && ui.includes('healthPayload.requestId=requestId')],
   ['Only uncertain remote commit responses enter authoritative confirmation', deploy.includes("str_starts_with($message,'REMOTE_COMMIT_UNCERTAIN_')") && ui.includes("payload.state==='unavailable'")],
   ['Remote agent independently enforces Cloudways roots', agent.includes('safeManagedRelative') && agent.includes("'public_html'") && agent.includes("'private_html'")],
+  ['DigiOps private release cannot overwrite persistent state', releaseManager.includes('validatePrivatePayload') && releaseManager.includes("['app','agent','build']") && agent.includes('validatePrivatePayload')],
   ['Control plane requires authoritative modern-agent marker', status.includes('$agentStatusSupported') && status.includes("'source'=>'agent-current-wait'")],
   ['Control plane exposes remote running state', status.includes("'state'=>'running'") && status.includes("'source'=>'agent-progress'")],
   ['Local ReleaseManager persists deployment progress', releaseManager.includes("deployment.json") && releaseManager.includes("'snapshotting'") && releaseManager.includes("'publishing'") && releaseManager.includes("'switching'")],
