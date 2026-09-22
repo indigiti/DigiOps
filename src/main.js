@@ -7,6 +7,7 @@ const ICONS={Activity,AppWindow,ArrowLeft,Boxes,CheckCircle2,ChevronDown,CircleG
 const icons=()=>queueMicrotask(()=>createIcons({icons:ICONS}))
 const APP_BASE=(import.meta.env.BASE_URL||'/digiops/').replace(/\/+$/,'')+'/'
 const appUrl=(path='')=>APP_BASE+String(path||'').replace(/^\/+/,'')
+const deploymentRequestId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('')
 
 const renderNativePathPreview=()=>{
   const slugInput=document.getElementById('digiops-app-slug')
@@ -543,6 +544,7 @@ function app(){
       const requestedCommit=this.candidateCommitSha==='—'?'':this.candidateCommitSha
       const requestedRun=this.candidateRunNumber
       const requestedArtifact=this.candidateArtifactId
+      const requestId=deploymentRequestId()
       const summary='Deploy '+requestedRun+' · artifact '+requestedArtifact+' · '+this.candidateCommitShort+' to '+this.selected.url+'?'
       if(!confirm(summary))return
       this.clearMessages();this.busy=true
@@ -563,7 +565,8 @@ function app(){
           project:this.selected.id,
           runId:this.candidateRun ? this.candidateRun.id : 0,
           artifactId:this.candidateArtifact ? this.candidateArtifact.id : 0,
-          commit:requestedCommit
+          commit:requestedCommit,
+          requestId
         })})
         clearTimeout(deployResponseTimer)
         this.setOperation(94,'Deployment published. Refreshing application registry…')
@@ -592,7 +595,7 @@ function app(){
           this.cacheDropProject(this.selected.id)
           for(let attempt=1;attempt<=120 && !reconciled && !remoteFailed;attempt++){
             try{
-              const status=await api('./api/deploy-status.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id,commit:requestedCommit})})
+              const status=await api('./api/deploy-status.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id,commit:requestedCommit,requestId})})
               lastState=status&&status.state?String(status.state):'pending'
               lastPhase=status&&status.phase?String(status.phase):''
               lastProgress=Number(status&&status.progress)||0
@@ -644,8 +647,8 @@ function app(){
             this.operation.message='Remote deployment is still running'+(lastPhase?' · '+lastPhase.replace(/[-_]+/g,' '):'')+'. Use Check update before retrying.'
             this.notice='Deployment is still running on the server; no second deploy was started.'
           }else{
-            this.error='DEPLOYMENT_CONFIRMATION_UNAVAILABLE'
-            this.failOperation('Deployment response was interrupted and the server did not expose final state. Check update before retrying.')
+            this.error='DEPLOYMENT_STATE_UNRESOLVED · request '+requestId.slice(0,8)
+            this.failOperation('Deployment response was interrupted and no authoritative final state was available. DigiOps did not start a second deploy; run Check update before retrying.')
           }
         }
       }finally{clearTimeout(deployResponseTimer);this.busy=false;icons()}

@@ -23,6 +23,8 @@ $data=json_decode(file_get_contents('php://input') ?: '',true);
 if(!is_array($data)) JsonResponse::send(['error'=>'INVALID_JSON'],400);
 $projectId=(string)($data['project']??'');
 $commit=strtolower(trim((string)($data['commit']??'')));
+$requestId=strtolower(trim((string)($data['requestId']??'')));
+if($requestId!=='' && !preg_match('/^[a-f0-9]{32}$/',$requestId)) JsonResponse::send(['error'=>'REQUEST_ID_INVALID'],400);
 
 if($projectId==='') JsonResponse::send(['error'=>'PROJECT_REQUIRED'],400);
 if(!preg_match('/^[a-f0-9]{40}$/',$commit)) JsonResponse::send(['error'=>'COMMIT_REQUIRED'],400);
@@ -33,10 +35,10 @@ try {
     if(!$project) JsonResponse::send(['error'=>'PROJECT_NOT_FOUND'],404);
 
     $registryCommit=strtolower(trim((string)($project['commit']??'')));
-    if($registryCommit===$commit){
+    if($requestId==='' && $registryCommit===$commit){
         JsonResponse::send([
             'ok'=>true,'state'=>'deployed','reconciled'=>false,
-            'commit'=>$commit,
+            'commit'=>$commit,'requestId'=>$requestId,
             'release'=>(string)($project['release']??''),
             'source'=>'registry',
         ]);
@@ -47,12 +49,14 @@ try {
     if(($target['id']??'local')==='local'){
         $deployment=(new ReleaseManager())->deploymentState($projectId);
         $deploymentCommit=strtolower(trim((string)($deployment['commit']??'')));
-        if($deploymentCommit===$commit){
+        $deploymentRequestId=strtolower(trim((string)($deployment['requestId']??'')));
+        $deploymentMatches=$deploymentCommit===$commit && ($requestId==='' || ($deploymentRequestId!=='' && hash_equals($deploymentRequestId,$requestId)));
+        if($deploymentMatches){
             $state=strtolower(trim((string)($deployment['state']??'')));
             if($state==='deployed'){
                 JsonResponse::send([
                     'ok'=>true,'state'=>'deployed','reconciled'=>true,
-                    'commit'=>$commit,
+                    'commit'=>$commit,'requestId'=>$requestId,
                     'release'=>(string)($deployment['release']??''),
                     'source'=>'local-progress',
                 ]);
@@ -60,7 +64,7 @@ try {
             if($state==='failed'){
                 JsonResponse::send([
                     'ok'=>false,'state'=>'failed','reconciled'=>false,
-                    'commit'=>$commit,
+                    'commit'=>$commit,'requestId'=>$requestId,
                     'phase'=>(string)($deployment['phase']??'failed'),
                     'progress'=>(int)($deployment['progress']??100),
                     'error'=>(string)($deployment['error']??'LOCAL_DEPLOY_FAILED'),
@@ -71,7 +75,7 @@ try {
             if($state==='running'){
                 JsonResponse::send([
                     'ok'=>true,'state'=>'running','reconciled'=>false,
-                    'commit'=>$commit,
+                    'commit'=>$commit,'requestId'=>$requestId,
                     'phase'=>(string)($deployment['phase']??'publishing'),
                     'progress'=>(int)($deployment['progress']??0),
                     'startedAt'=>(string)($deployment['startedAt']??''),
@@ -95,11 +99,13 @@ try {
         $remote=$targets->remoteRequest($projectId,'deployment-status',['project'=>$projectId]);
         $current=is_array($remote['current']??null)?$remote['current']:[];
         $currentCommit=strtolower(trim((string)($current['commit']??'')));
-        if($currentCommit===$commit){
+        $currentRequestId=strtolower(trim((string)($current['requestId']??'')));
+        $currentMatches=$currentCommit===$commit && ($requestId==='' || ($currentRequestId!=='' && hash_equals($currentRequestId,$requestId)));
+        if($currentMatches){
             $releaseId=(string)($current['release']??'Recovered release');
             $lastDeploy=(string)($current['lastDeploy']??date(DATE_ATOM));
             $registry->patchRuntime($projectId,[
-                'status'=>'deployed','health'=>'pending','commit'=>$commit,
+                'status'=>'deployed','health'=>'pending','commit'=>$commit,'requestId'=>$requestId,
                 'release'=>$releaseId,'lastDeploy'=>$lastDeploy,'update'=>false,
             ]);
             (new AuditLog())->write('DEPLOY_RECONCILED',[
@@ -117,12 +123,14 @@ try {
         // this state prevents a long publish from being misclassified as failed.
         $deployment=is_array($remote['deployment']??null)?$remote['deployment']:[];
         $deploymentCommit=strtolower(trim((string)($deployment['commit']??'')));
-        if($deploymentCommit===$commit){
+        $deploymentRequestId=strtolower(trim((string)($deployment['requestId']??'')));
+        $deploymentMatches=$deploymentCommit===$commit && ($requestId==='' || ($deploymentRequestId!=='' && hash_equals($deploymentRequestId,$requestId)));
+        if($deploymentMatches){
             $remoteState=strtolower(trim((string)($deployment['state']??'')));
             if(in_array($remoteState,['uploading','running'],true)){
                 JsonResponse::send([
                     'ok'=>true,'state'=>'running','reconciled'=>false,
-                    'commit'=>$commit,
+                    'commit'=>$commit,'requestId'=>$requestId,
                     'phase'=>(string)($deployment['phase']??'publishing'),
                     'progress'=>(int)($deployment['progress']??0),
                     'startedAt'=>(string)($deployment['startedAt']??''),
@@ -134,7 +142,7 @@ try {
             if($remoteState==='failed'){
                 JsonResponse::send([
                     'ok'=>false,'state'=>'failed','reconciled'=>false,
-                    'commit'=>$commit,
+                    'commit'=>$commit,'requestId'=>$requestId,
                     'phase'=>(string)($deployment['phase']??'failed'),
                     'progress'=>(int)($deployment['progress']??100),
                     'error'=>(string)($deployment['error']??'REMOTE_DEPLOY_FAILED'),
@@ -195,7 +203,7 @@ try {
     $releaseId=(string)($matched['id']??$matched['release']??'Recovered release');
     $lastDeploy=$createdAt!==''?$createdAt:date(DATE_ATOM);
     $registry->patchRuntime($projectId,[
-        'status'=>'deployed','health'=>'pending','commit'=>$commit,
+        'status'=>'deployed','health'=>'pending','commit'=>$commit,'requestId'=>$requestId,
         'release'=>$releaseId,'lastDeploy'=>$lastDeploy,'update'=>false,
     ]);
     (new AuditLog())->write('DEPLOY_RECONCILED',[

@@ -23,6 +23,7 @@ final class RemoteDeploymentDriver
             'meta'=>[
                 'commit'=>(string)($meta['commit']??''),
                 'artifactId'=>(string)($meta['artifactId']??''),
+                'requestId'=>(string)($meta['requestId']??''),
             ],
         ]);
         $uploadId=(string)($start['uploadId']??'');
