@@ -8,6 +8,7 @@ const icons=()=>queueMicrotask(()=>createIcons({icons:ICONS}))
 const APP_BASE=(import.meta.env.BASE_URL||'/digiops/').replace(/\/+$/,'')+'/'
 const appUrl=(path='')=>APP_BASE+String(path||'').replace(/^\/+/,'')
 const deploymentRequestId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('')
+const DEPLOYMENT_WATCH_KEY='digiops.deployment-watches.v1'
 
 const HELP_TOPICS={
   dashboard:{title:'Command Center',intro:'A last-known operational summary. Opening this page does not fan out to GitHub or remote targets.',items:['Attention shows applications that need review.','Updates are known deployable builds detected during an explicit update check.','Pending means health has not been verified yet.','Use Deployment Center for release activity and Health & Readiness for fleet condition.']},
@@ -62,6 +63,7 @@ function app(){
     projects:[], targets:[], selectedId:null, releases:[], githubInfo:null, fileListing:null, health:null, audit:[],
     detailCache:{github:{},releases:{},health:{},files:{}}, requestPool:{},
     modal:null, busy:false, notice:'', error:'', operationTimer:null,
+    deploymentWatches:[], deploymentWatchTimer:null, deploymentWatchBusy:false,
     operation:{active:false,type:'',title:'',message:'',percent:0,status:'idle',estimated:false},
     login:{username:'',password:'',totp:''},
     install:{name:'Administrator',username:'admin',password:'',confirm:'',totpSecret:''},
@@ -77,7 +79,8 @@ function app(){
     async init(){
       await this.bootstrap()
       window.addEventListener('popstate',()=>this.applyRoute(window.location.pathname,false))
-      if(this.user) await this.applyRoute(window.location.pathname,true)
+      document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&this.user)this.verifyDeploymentWatches()})
+      if(this.user){await this.applyRoute(window.location.pathname,true);this.resumeDeploymentWatches()}
       this.routeReady=true
       icons()
     },
@@ -138,14 +141,14 @@ function app(){
       try{
         const d=await api('./api/login.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(this.login)})
         this.user=d.user;this.csrf=d.csrf;this.login.password='';this.notice='Signed in.'
-        await Promise.all([this.loadProjects(),this.loadTargets(),this.loadRuntimeInfo()]);await this.applyRoute(window.location.pathname,true)
+        await Promise.all([this.loadProjects(),this.loadTargets(),this.loadRuntimeInfo()]);await this.applyRoute(window.location.pathname,true);this.resumeDeploymentWatches()
       }catch(e){this.error=e.message}
       finally{this.busy=false;icons()}
     },
     async logout(){
       this.clearMessages()
       try{await api('./api/logout.php',{method:'POST',headers:{'X-CSRF-Token':this.csrf}})}catch{}
-      this.user=null;this.csrf=null;this.projects=[];this.page='dashboard';history.replaceState({},'',APP_BASE);icons()
+      this.stopDeploymentWatchLoop();this.user=null;this.csrf=null;this.projects=[];this.page='dashboard';history.replaceState({},'',APP_BASE);icons()
     },
     async loadProjects(){
       const d=await api('./api/projects.php');this.projects=d.projects||[];icons()
@@ -225,6 +228,9 @@ function app(){
       })
     },
     get selected(){return this.projects.find(p=>p.id===this.selectedId)||null},
+    get activeDeploymentWatches(){return this.deploymentWatches.filter(w=>['queued','pending','running','unavailable'].includes(w.status))},
+    get selectedDeploymentWatch(){return this.selected?this.activeDeploymentWatches.find(w=>w.projectId===this.selected.id)||null:null},
+    get backgroundDeploymentCount(){return this.activeDeploymentWatches.length},
     get userName(){return this.user && this.user.name ? this.user.name : ''},
     get userRole(){return this.user && this.user.role ? this.user.role : ''},
     get selectedName(){return this.selected ? this.selected.name : ''},
@@ -330,6 +336,94 @@ function app(){
     releaseCreated(r){return this.formatDate(r && r.createdAt ? r.createdAt : '')},
     releaseSize(r){return this.formatBytes(r && r.size ? r.size : 0)},
     isCurrentRelease(r){return !!(r && this.selected && String(r.id||'')===String(this.selected.release||''))},
+    persistDeploymentWatches(){
+      try{localStorage.setItem(DEPLOYMENT_WATCH_KEY,JSON.stringify(this.activeDeploymentWatches))}
+      catch{}
+    },
+    loadDeploymentWatches(){
+      try{
+        const raw=JSON.parse(localStorage.getItem(DEPLOYMENT_WATCH_KEY)||'[]')
+        this.deploymentWatches=Array.isArray(raw)?raw.filter(w=>w&&w.projectId&&w.commit&&w.requestId):[]
+      }catch{this.deploymentWatches=[]}
+    },
+    queueDeploymentWatch(watch){
+      const next={...watch,status:watch.status||'queued',phase:watch.phase||'starting',progress:Number(watch.progress)||0,startedAt:watch.startedAt||new Date().toISOString(),lastCheckedAt:''}
+      this.deploymentWatches=this.deploymentWatches.filter(w=>w.requestId!==next.requestId&&w.projectId!==next.projectId)
+      this.deploymentWatches.push(next)
+      this.persistDeploymentWatches()
+      this.startDeploymentWatchLoop()
+      queueMicrotask(()=>this.verifyDeploymentWatches())
+    },
+    clearDeploymentWatch(requestId){
+      this.deploymentWatches=this.deploymentWatches.filter(w=>w.requestId!==requestId)
+      this.persistDeploymentWatches()
+      if(!this.activeDeploymentWatches.length)this.stopDeploymentWatchLoop()
+    },
+    resumeDeploymentWatches(){
+      this.loadDeploymentWatches()
+      if(this.activeDeploymentWatches.length){
+        this.startDeploymentWatchLoop()
+        queueMicrotask(()=>this.verifyDeploymentWatches())
+      }
+    },
+    startDeploymentWatchLoop(){
+      if(this.deploymentWatchTimer)return
+      this.deploymentWatchTimer=setInterval(()=>this.verifyDeploymentWatches(),5000)
+    },
+    stopDeploymentWatchLoop(){
+      if(this.deploymentWatchTimer){clearInterval(this.deploymentWatchTimer);this.deploymentWatchTimer=null}
+    },
+    async verifyDeploymentWatches(){
+      if(this.deploymentWatchBusy||!this.user||!this.csrf||!this.activeDeploymentWatches.length)return
+      this.deploymentWatchBusy=true
+      try{
+        for(const watch of [...this.activeDeploymentWatches]){
+          const age=Date.now()-new Date(watch.startedAt).getTime()
+          if(Number.isFinite(age)&&age>30*60*1000){
+            watch.status='attention';watch.phase='verification-window-expired';watch.lastCheckedAt=new Date().toISOString()
+            continue
+          }
+          try{
+            const status=await apiTimed('./api/deploy-status.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:watch.projectId,commit:watch.commit,requestId:watch.requestId})},8000)
+            watch.lastCheckedAt=new Date().toISOString()
+            watch.status=status&&status.state?String(status.state):'pending'
+            watch.phase=status&&status.phase?String(status.phase):watch.phase
+            watch.progress=Number(status&&status.progress)||watch.progress||0
+            if(watch.status==='deployed'){
+              const completed={...watch}
+              this.clearDeploymentWatch(watch.requestId)
+              this.cacheDropProject(watch.projectId)
+              try{await api('./api/health.php?project='+encodeURIComponent(watch.projectId))}catch{}
+              await this.loadProjects()
+              if(this.selected&&this.selected.id===watch.projectId){
+                try{await this.loadGithubInfo(true)}catch{}
+                try{await this.loadReleases(true)}catch{}
+              }
+              this.notice=(completed.projectName||completed.projectId)+' deployed and verified in background · '+(completed.run||'build')+' · artifact '+(completed.artifact||'—')+'.'
+            }else if(watch.status==='failed'){
+              const failed=status.error||'DEPLOY_FAILED'
+              this.clearDeploymentWatch(watch.requestId)
+              this.error=(watch.projectName||watch.projectId)+' deployment failed · '+failed
+            }
+          }catch{
+            watch.status='unavailable'
+            watch.lastCheckedAt=new Date().toISOString()
+          }
+        }
+        this.persistDeploymentWatches()
+      }finally{
+        this.deploymentWatchBusy=false
+        icons()
+      }
+    },
+    deploymentWatchLabel(watch){
+      if(!watch)return ''
+      if(watch.status==='running')return (watch.phase||'running').replace(/[-_]+/g,' ')+' · '+(watch.progress||0)+'%'
+      if(watch.status==='unavailable')return 'confirmation channel retrying'
+      if(watch.status==='pending'||watch.status==='queued')return 'awaiting authoritative confirmation'
+      if(watch.status==='attention')return 'verification needs review'
+      return watch.status
+    },
     startOperation(type,title,message,percent=5,estimated=false){
       this.stopOperationTimer()
       this.operation={active:true,type,title,message,percent,status:'running',estimated}
@@ -606,6 +700,7 @@ function app(){
       const summary='Deploy '+requestedRun+' · artifact '+requestedArtifact+' · '+this.candidateCommitShort+' to '+this.selected.url+'?'
       if(!confirm(summary))return
       this.clearMessages();this.busy=true
+      this.queueDeploymentWatch({projectId:this.selected.id,projectName:this.selectedName,commit:requestedCommit,requestId,run:requestedRun,artifact:requestedArtifact,status:'queued',phase:'starting',progress:6})
       this.startOperation('deploy','Deploying '+this.selectedName,'Preparing verified deployment candidate…',6,true)
       this.runEstimatedStages([
         {percent:14,message:'Locking deployment target…'},
@@ -634,6 +729,7 @@ function app(){
         await this.loadReleases(true)
         this.setOperation(99,'Running post-deploy health check…')
         await this.checkHealth(true)
+        this.clearDeploymentWatch(requestId)
         this.notice='Deployed release '+d.release
         this.completeOperation('Deployment complete and health check finished.')
       }catch(e){
@@ -643,76 +739,31 @@ function app(){
         const ambiguous=aborted || /INVALID_RESPONSE|TARGET_CONNECT_FAILED|HTTP_50[234]|Failed to fetch|NetworkError/i.test(transportError)
         let reconciled=false
         let remoteFailed=''
-        let lastState=''
-        let lastPhase=''
-        let lastProgress=0
         if(ambiguous && requestedCommit){
           this.stopOperationTimer()
-          this.operation.estimated=false
-          this.setOperation(84,'Deployment response interrupted. Following authoritative server state…')
-          this.cacheDropProject(this.selected.id)
-          const verificationStarted=Date.now()
-          const verificationWindowMs=420000
-          for(let attempt=1;attempt<=120 && Date.now()-verificationStarted<verificationWindowMs && !reconciled && !remoteFailed;attempt++){
-            try{
-              const status=await apiTimed('./api/deploy-status.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id,commit:requestedCommit,requestId})},8000)
-              lastState=status&&status.state?String(status.state):'pending'
-              lastPhase=status&&status.phase?String(status.phase):''
-              lastProgress=Number(status&&status.progress)||0
-              if(status && status.state==='deployed'){
-                reconciled=true
-                break
-              }
-              if(status && status.state==='failed'){
-                remoteFailed=status.error||'REMOTE_DEPLOY_FAILED'
-                break
-              }
-              if(status && status.state==='running'){
-                const phaseLabel=lastPhase?lastPhase.replace(/[-_]+/g,' '):'publishing'
-                const serverPct=Math.max(84,Math.min(96,lastProgress||84))
-                this.operation.percent=serverPct
-                this.operation.message='Server '+phaseLabel+' · '+(lastProgress||0)+'% · confirmation check '+attempt
-              }else if(status && status.state==='unavailable'){
-                const statusError=status.error?String(status.error).split(':')[0]:'temporary transport error'
-                this.operation.message='Confirmation channel retrying · '+statusError+' · check '+attempt
-              }else{
-                this.operation.message='Waiting for authoritative publish marker · confirmation check '+attempt
-              }
-            }catch(_){
-              this.operation.message='Confirmation channel retrying · bounded status timeout · check '+attempt
-            }
-            if(attempt<120 && Date.now()-verificationStarted<verificationWindowMs && !reconciled && !remoteFailed){
-              await new Promise(resolve=>setTimeout(resolve,3000))
-            }
-          }
-          if(reconciled){
-            this.error=''
-            this.cacheDropProject(this.selected.id)
-            await this.loadProjects()
-            await this.loadGithubInfo(true)
-            this.setOperation(97,'Exact candidate is deployed. Refreshing release history…')
-            await this.loadReleases(true)
-            this.setOperation(99,'Running post-deploy health check…')
-            await this.checkHealth(true)
-            this.notice='Deployment verified after response interruption · '+requestedRun+' · artifact '+requestedArtifact+'.'
-            this.completeOperation('Deployment committed successfully; exact remote release verification passed.')
-          }
+          this.queueDeploymentWatch({
+            projectId:this.selected.id,
+            projectName:this.selectedName,
+            commit:requestedCommit,
+            requestId,
+            run:requestedRun,
+            artifact:requestedArtifact,
+            status:'queued',
+            phase:'authoritative-confirmation',
+            progress:84
+          })
+          this.error=''
+          this.notice='Deployment handed off. You can continue using DigiOps; verification will continue automatically.'
+          this.completeOperation('Deployment continues on the server. Background verification is active.')
+          reconciled=true
         }
         if(remoteFailed){
           this.error=remoteFailed
           this.failOperation('Deployment failed on target: '+remoteFailed)
         }else if(!reconciled){
-          if(lastState==='running'){
-            this.error=''
-            this.stopOperationTimer()
-            this.operation.status='running'
-            this.operation.estimated=false
-            this.operation.message='Remote deployment is still running'+(lastPhase?' · '+lastPhase.replace(/[-_]+/g,' '):'')+'. Use Check update before retrying.'
-            this.notice='Deployment is still running on the server; no second deploy was started.'
-          }else{
-            this.error='DEPLOYMENT_STATE_UNRESOLVED · request '+requestId.slice(0,8)
-            this.failOperation('Deployment response was interrupted and no authoritative final state was available. DigiOps did not start a second deploy; run Check update before retrying.')
-          }
+          this.clearDeploymentWatch(requestId)
+          this.error=transportError
+          this.failOperation('Deployment failed before it could be handed off for authoritative verification.')
         }
       }finally{clearTimeout(deployResponseTimer);this.busy=false;icons()}
     },
@@ -965,6 +1016,7 @@ document.querySelector('#app').innerHTML=`
         </div>
         <div class="ml-auto flex min-w-0 items-center gap-2">
           <label class="search-field hidden md:flex"><i data-lucide="search" class="h-4 w-4 text-slate-400"></i><input x-model="query" @keydown.enter="go('projects')" placeholder="Find an application…"></label>
+          <button x-show="backgroundDeploymentCount" @click="go('deployments')" class="hidden items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 sm:inline-flex"><i data-lucide="refresh-cw" class="h-3.5 w-3.5 animate-spin"></i><span x-text="backgroundDeploymentCount+' verifying'"></span></button>
           <button @click="openHelp()" class="icon-btn" title="Explain this page"><i data-lucide="circle-help" class="h-4 w-4"></i></button>
           <span class="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 xl:inline-flex"><span class="status-dot" :class="runtimeInfo&&runtimeInfo.identityVerified?'bg-emerald-500':'bg-amber-500'"></span><span x-text="runtimeInfo&&runtimeInfo.identityVerified?'Verified build':'Build check needed'"></span></span>
         </div>
@@ -973,6 +1025,15 @@ document.querySelector('#app').innerHTML=`
       <div class="px-4 py-6 md:px-7">
         <div x-show="notice" class="mb-4 rounded-xl px-4 py-3 text-sm font-medium" :class="noticeTone" x-text="notice"></div>
         <div x-show="error" class="mb-4 rounded-xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700" x-text="error"></div>
+        <div x-show="backgroundDeploymentCount" class="mb-4 space-y-2">
+          <template x-for="w in activeDeploymentWatches" :key="w.requestId">
+            <div class="deployment-watch-card">
+              <span class="deployment-watch-icon"><i data-lucide="refresh-cw" class="h-4 w-4 animate-spin"></i></span>
+              <div class="min-w-0 flex-1"><div class="flex flex-wrap items-center justify-between gap-2"><b class="truncate text-sm" x-text="w.projectName||w.projectId"></b><span class="text-xs font-semibold text-blue-700">Background verification</span></div><p class="mt-1 text-xs text-slate-500" x-text="deploymentWatchLabel(w)"></p></div>
+              <button @click="openProjectTab(w.projectId,'deploy')" class="btn py-1.5 text-xs">Open</button>
+            </div>
+          </template>
+        </div>
         <div x-show="operation.active" class="operation-card" :class="operationTone">
           <div class="flex items-start gap-3">
             <span class="operation-icon"><i data-lucide="refresh-cw" class="h-4 w-4 animate-spin"></i></span>
@@ -1057,7 +1118,7 @@ document.querySelector('#app').innerHTML=`
         </section>
 
         <section x-show="page==='project' && selected">
-          <div class="mb-5 flex flex-wrap items-center gap-3"><button @click="go('projects')" class="icon-btn"><i data-lucide="arrow-left"></i></button><div><h1 class="text-xl font-bold" x-text="selectedName"></h1><p class="text-sm text-slate-500" x-text="selectedRepo"></p></div><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="selectedBranch"></span></span><span class="pill"><i data-lucide="server" class="h-3.5 w-3.5"></i><span x-text="targetName(selectedTargetId)"></span></span><div class="ml-auto flex gap-2"><button @click="checkUpdate()" class="btn" :disabled="busy"><i data-lucide="refresh-cw" class="h-4 w-4" :class="checkingUpdate?'animate-spin':''"></i><span x-text="checkingUpdate?'Checking…':'Check update'"></span></button><button x-show="githubNeedsConnection" @click="go('settings')" class="btn"><i data-lucide="github" class="h-4 w-4"></i>Connect GitHub</button><button @click="deploy()" class="btn btn-primary" :disabled="busy || !githubConnected"><i data-lucide="rocket" class="h-4 w-4"></i><span x-text="deploying?'Deploying…':'Deploy'"></span></button></div></div>
+          <div class="mb-5 flex flex-wrap items-center gap-3"><button @click="go('projects')" class="icon-btn"><i data-lucide="arrow-left"></i></button><div><h1 class="text-xl font-bold" x-text="selectedName"></h1><p class="text-sm text-slate-500" x-text="selectedRepo"></p></div><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="selectedBranch"></span></span><span class="pill"><i data-lucide="server" class="h-3.5 w-3.5"></i><span x-text="targetName(selectedTargetId)"></span></span><div class="ml-auto flex gap-2"><button @click="checkUpdate()" class="btn" :disabled="busy"><i data-lucide="refresh-cw" class="h-4 w-4" :class="checkingUpdate?'animate-spin':''"></i><span x-text="checkingUpdate?'Checking…':'Check update'"></span></button><button x-show="githubNeedsConnection" @click="go('settings')" class="btn"><i data-lucide="github" class="h-4 w-4"></i>Connect GitHub</button><button @click="deploy()" class="btn btn-primary" :disabled="busy || !githubConnected || selectedDeploymentWatch"><i data-lucide="rocket" class="h-4 w-4"></i><span x-text="selectedDeploymentWatch?'Verifying…':deploying?'Deploying…':'Deploy'"></span></button></div></div>
           <div class="mb-5 flex gap-6 overflow-x-auto border-b border-slate-200"><template x-for="t in ['overview','deploy','releases','files','health','settings']"><button @click="setTab(t)" class="tab capitalize" :class="projectTab===t?'active':''" x-text="t"></button></template></div>
           <div x-show="projectTab==='overview'" class="grid gap-5 xl:grid-cols-[1.4fr_.8fr]">
             <div class="panel"><h2 class="font-bold">Deployment configuration</h2><div class="row"><span><b class="block text-sm">Public URL</b><small class="text-slate-500">Browser route</small></span><code x-text="selectedUrl"></code></div><div class="row"><span><b class="block text-sm">Public folder</b><small class="text-slate-500">Release payload only</small></span><code class="text-xs" x-text="selectedPublicPath"></code></div><div class="row"><span><b class="block text-sm">Private folder</b><small class="text-slate-500">Runtime and metadata</small></span><code class="text-xs" x-text="selectedPrivatePath"></code></div><div class="row"><span><b class="block text-sm">Current commit</b></span><code x-text="selectedCommit"></code></div></div>
@@ -1152,7 +1213,7 @@ document.querySelector('#app').innerHTML=`
             </div>
 
             <div class="panel">
-              <div class="flex flex-wrap items-center justify-between gap-4"><div><h3 class="font-bold">Approval</h3><p class="muted mt-1">DigiOps will snapshot the current public release, overlay private application code without deleting runtime data, validate the ZIP and publish this exact candidate.</p></div><button @click="deploy()" class="btn btn-primary" :disabled="busy || !githubConnected || !candidateReady"><i data-lucide="rocket" class="h-4 w-4"></i><span x-text="candidateReady?'Deploy '+candidateRunNumber:'No deployable build'"></span></button></div>
+              <div class="flex flex-wrap items-center justify-between gap-4"><div><h3 class="font-bold">Approval</h3><p class="muted mt-1">DigiOps will snapshot the current public release, overlay private application code without deleting runtime data, validate the ZIP and publish this exact candidate.</p></div><button @click="deploy()" class="btn btn-primary" :disabled="busy || !githubConnected || !candidateReady || selectedDeploymentWatch"><i data-lucide="rocket" class="h-4 w-4"></i><span x-text="selectedDeploymentWatch?'Verification running':candidateReady?'Deploy '+candidateRunNumber:'No deployable build'"></span></button></div>
             </div>
           </div>
           <div x-show="projectTab==='releases'" class="table-wrap releases-table">
