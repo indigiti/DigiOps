@@ -6,6 +6,7 @@ require_once __DIR__ . '/_bootstrap.php';
 header('Cache-Control: no-store, private');
 
 use DigiOps\Audit\AuditLog;
+use DigiOps\Deploy\ReleaseManager;
 use DigiOps\Registry\ProjectRegistry;
 use DigiOps\Security\Session;
 use DigiOps\Support\JsonResponse;
@@ -44,9 +45,45 @@ try {
     $targets=new TargetService();
     $target=$targets->forProject($projectId);
     if(($target['id']??'local')==='local'){
+        $deployment=(new ReleaseManager())->deploymentState($projectId);
+        $deploymentCommit=strtolower(trim((string)($deployment['commit']??'')));
+        if($deploymentCommit===$commit){
+            $state=strtolower(trim((string)($deployment['state']??'')));
+            if($state==='deployed'){
+                JsonResponse::send([
+                    'ok'=>true,'state'=>'deployed','reconciled'=>true,
+                    'commit'=>$commit,
+                    'release'=>(string)($deployment['release']??''),
+                    'source'=>'local-progress',
+                ]);
+            }
+            if($state==='failed'){
+                JsonResponse::send([
+                    'ok'=>false,'state'=>'failed','reconciled'=>false,
+                    'commit'=>$commit,
+                    'phase'=>(string)($deployment['phase']??'failed'),
+                    'progress'=>(int)($deployment['progress']??100),
+                    'error'=>(string)($deployment['error']??'LOCAL_DEPLOY_FAILED'),
+                    'updatedAt'=>(string)($deployment['updatedAt']??''),
+                    'source'=>'local-progress',
+                ]);
+            }
+            if($state==='running'){
+                JsonResponse::send([
+                    'ok'=>true,'state'=>'running','reconciled'=>false,
+                    'commit'=>$commit,
+                    'phase'=>(string)($deployment['phase']??'publishing'),
+                    'progress'=>(int)($deployment['progress']??0),
+                    'startedAt'=>(string)($deployment['startedAt']??''),
+                    'updatedAt'=>(string)($deployment['updatedAt']??''),
+                    'release'=>(string)($deployment['release']??''),
+                    'source'=>'local-progress',
+                ]);
+            }
+        }
         JsonResponse::send([
             'ok'=>true,'state'=>'pending','reconciled'=>false,
-            'commit'=>$commit,'source'=>'registry',
+            'commit'=>$commit,'source'=>'local-progress-wait',
         ]);
     }
 
