@@ -38,6 +38,14 @@ private_html/digiops/app/php/bootstrap.php
 
 No database is required.
 
+Configure a trusted local health origin in the Cloudways application environment:
+
+```text
+DIGIOPS_CANONICAL_ORIGIN=https://stage.digiti.in
+```
+
+`APP_URL` is also accepted as a fallback. DigiOps does not derive health-check destinations from the incoming HTTP `Host` header.
+
 ## Browser setup
 
 Open:
