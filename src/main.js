@@ -1374,7 +1374,7 @@ document.querySelector('#app').innerHTML=`
               <div class="job-row">
                 <span class="deployment-watch-icon"><i data-lucide="refresh-cw" class="h-4 w-4 animate-spin"></i></span>
                 <div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><b class="truncate" x-text="w.projectName||w.projectId"></b><span class="pill capitalize" x-text="w.status"></span></div><p class="mt-1 text-xs text-slate-500"><span class="capitalize" x-text="deploymentWatchLabel(w)"></span> · <span x-text="w.run"></span> · artifact <span x-text="w.artifact"></span></p></div>
-                <button @click="openProjectTab(w.projectId,'deploy')" class="btn py-1.5 text-xs">Open</button>
+                <button @click="openVerificationJob(w.requestId)" class="btn py-1.5 text-xs">Verify</button>
               </div>
             </template>
           </div>
@@ -1390,11 +1390,83 @@ document.querySelector('#app').innerHTML=`
               <div class="mb-4"><h2 class="font-bold">Recent deployment jobs</h2><p class="muted mt-1">Exact request, artifact and outcome retained by the control plane.</p></div>
               <div x-show="recentDeploymentJobs.length===0" class="empty-state">No deployment jobs recorded yet.</div>
               <template x-for="j in recentDeploymentJobs" :key="j.requestId">
-                <button @click="openProjectTab(j.project,'deploy')" class="row w-full text-left">
+                <button @click="openVerificationJob(j.requestId)" class="row w-full text-left">
                   <span class="min-w-0"><b class="block truncate" x-text="j.projectName||j.project"></b><small class="block truncate text-slate-500"><span x-text="deploymentJobIdentity(j)"></span> · <span class="capitalize" x-text="deploymentJobPhase(j)"></span></small></span>
                   <span class="text-right"><span class="pill capitalize" :class="j.state==='failed'?'border-rose-200 bg-rose-50 text-rose-700':j.state==='deployed'?'border-emerald-200 bg-emerald-50 text-emerald-700':''" x-text="j.state"></span><small class="mt-1 block text-slate-400" x-text="formatDate(j.updatedAt)"></small></span>
                 </button>
               </template>
+            </div>
+          </div>
+        </section>
+
+        <section data-digiops-page="verification" x-show="page==='verification'" class="space-y-6">
+          <div class="page-heading">
+            <div><p class="eyebrow">Observe</p><h1>Verification Center</h1><p>Step-by-step deployment evidence from DigiOps durable local state. No GitHub or target fan-out occurs just by opening this page.</p></div>
+            <div class="flex gap-2"><button @click="syncDeploymentWatches()" class="btn"><i data-lucide="refresh-cw" class="h-4 w-4"></i>Refresh</button><button @click="openHelp('verification')" class="btn"><i data-lucide="circle-help" class="h-4 w-4"></i>Verification model</button></div>
+          </div>
+
+          <div class="fleet-strip">
+            <div class="fleet-chip"><span>Recent jobs</span><b x-text="verificationStats.total"></b></div>
+            <div class="fleet-chip"><span>Active</span><b class="text-blue-700" x-text="verificationStats.active"></b></div>
+            <div class="fleet-chip"><span>Health verified</span><b class="text-emerald-700" x-text="verificationStats.verified"></b></div>
+            <div class="fleet-chip"><span>Needs attention</span><b class="text-amber-700" x-text="verificationStats.attention"></b></div>
+            <div class="fleet-chip"><span>Failed</span><b class="text-rose-700" x-text="verificationStats.failed"></b></div>
+          </div>
+
+          <div class="grid gap-5 xl:grid-cols-[.8fr_1.2fr]">
+            <div class="panel">
+              <div class="mb-4"><h2 class="font-bold">Deployment attempts</h2><p class="muted mt-1">Newest first. Select a request to inspect every recorded checkpoint.</p></div>
+              <div x-show="verificationJobs.length===0" class="empty-state">No deployment verification records yet.</div>
+              <div class="divide-y divide-slate-100">
+                <template x-for="j in verificationJobs" :key="j.requestId">
+                  <button @click="selectVerificationJob(j.requestId)" class="w-full py-3 text-left" :class="selectedVerificationJob&&selectedVerificationJob.requestId===j.requestId?'bg-blue-50/60':''">
+                    <div class="flex items-start justify-between gap-3 px-2">
+                      <span class="min-w-0"><b class="block truncate text-sm" x-text="j.projectName||j.project"></b><small class="mt-1 block truncate text-slate-500"><span x-text="deploymentJobIdentity(j)"></span> · <code x-text="deploymentJobCommit(j)"></code></small><small class="mt-1 block capitalize text-slate-400" x-text="deploymentJobPhase(j)"></small></span>
+                      <span class="text-right"><span class="pill capitalize" :class="verificationTone(j.state==='failed'?'failed':j.phase==='health-attention'?'attention':j.state==='deployed'?'passed':j.state==='unavailable'?'unavailable':'running')" x-text="j.state"></span><small class="mt-1 block text-slate-400" x-text="formatDate(j.updatedAt)"></small></span>
+                    </div>
+                  </button>
+                </template>
+              </div>
+            </div>
+
+            <div class="space-y-5">
+              <div x-show="!selectedVerificationJob" class="panel empty-state">Select a deployment attempt to inspect verification evidence.</div>
+              <div x-show="selectedVerificationJob" class="panel">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div><p class="text-sm font-medium text-blue-600">Selected deployment</p><h2 class="mt-1 text-xl font-bold" x-text="selectedVerificationJob&&(selectedVerificationJob.projectName||selectedVerificationJob.project)"></h2><p class="muted mt-1"><span x-text="selectedVerificationJob&&deploymentJobIdentity(selectedVerificationJob)"></span> · commit <code x-text="selectedVerificationJob&&deploymentJobCommit(selectedVerificationJob)"></code></p></div>
+                  <span class="pill capitalize" :class="selectedVerificationJob&&verificationTone(selectedVerificationJob.state==='failed'?'failed':selectedVerificationJob.phase==='health-attention'?'attention':selectedVerificationJob.state==='deployed'?'passed':selectedVerificationJob.state==='unavailable'?'unavailable':'running')" x-text="selectedVerificationJob&&selectedVerificationJob.state"></span>
+                </div>
+
+                <div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3 text-sm">
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Request ID</span><code class="mt-1 block truncate" :title="selectedVerificationJob&&selectedVerificationJob.requestId" x-text="selectedVerificationJob&&selectedVerificationJob.requestId"></code></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Target</span><b class="mt-1 block" x-text="selectedVerificationJob&&targetName(selectedVerificationJob.targetId||'local')"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Progress</span><b class="mt-1 block text-lg" x-text="selectedVerificationJob?String(selectedVerificationJob.progress||0)+'%':'—'"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Started</span><b class="mt-1 block text-xs" x-text="selectedVerificationJob&&formatDate(selectedVerificationJob.startedAt||selectedVerificationJob.createdAt)"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Updated</span><b class="mt-1 block text-xs" x-text="selectedVerificationJob&&formatDate(selectedVerificationJob.updatedAt)"></b></div>
+                  <div class="rounded-xl bg-slate-50 p-3"><span class="text-xs text-slate-500">Release</span><code class="mt-1 block truncate" x-text="selectedVerificationJob&&(selectedVerificationJob.release||'—')"></code></div>
+                </div>
+
+                <div x-show="selectedVerificationJob&&selectedVerificationJob.error" class="mt-5 rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                  <div class="flex items-center gap-2 text-sm font-bold text-rose-800"><i data-lucide="activity" class="h-4 w-4"></i>Exact failure evidence</div>
+                  <code class="mt-2 block break-all text-xs text-rose-700" x-text="selectedVerificationJob&&selectedVerificationJob.error"></code>
+                  <p class="mt-2 text-xs leading-5 text-rose-700" x-text="selectedVerificationJob&&verificationErrorHint(selectedVerificationJob)"></p>
+                </div>
+              </div>
+
+              <div x-show="selectedVerificationJob" class="panel">
+                <div class="mb-4 flex items-start justify-between gap-3"><div><h2 class="font-bold">Verification checkpoints</h2><p class="muted mt-1">Each line is server-retained evidence. A failure remains attached to the checkpoint where it occurred.</p></div><button @click="selectedVerificationJob&&openProjectTab(selectedVerificationJob.project,'deploy')" class="btn py-1.5 text-xs">Open application</button></div>
+                <div class="space-y-3">
+                  <template x-for="step in verificationSteps(selectedVerificationJob)" :key="step.key">
+                    <div class="rounded-2xl border border-slate-200 p-4">
+                      <div class="flex flex-wrap items-start justify-between gap-3">
+                        <div class="min-w-0"><div class="flex items-center gap-2"><span class="status-dot" :class="step.status==='passed'?'bg-emerald-500':step.status==='failed'?'bg-rose-500':step.status==='attention'||step.status==='unavailable'?'bg-amber-500':'bg-blue-500'"></span><b class="capitalize" x-text="step.label||String(step.phase||'step').replace(/[-_]+/g,' ')"></b></div><p class="mt-1 text-xs text-slate-500"><span x-text="step.source||'control-plane'"></span> · <span x-text="formatDate(step.updatedAt||step.startedAt)"></span></p></div>
+                        <span class="pill capitalize" :class="verificationTone(step.status)" x-text="step.status"></span>
+                      </div>
+                      <code x-show="step.error" class="mt-3 block break-all rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700" x-text="step.error"></code>
+                    </div>
+                  </template>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -1422,7 +1494,8 @@ document.querySelector('#app').innerHTML=`
           <div class="page-heading"><div><p class="eyebrow">Learn</p><h1>Help & Guide</h1><p>Concise operating guidance for deployment, recovery, health, targets and runtime identity.</p></div></div>
           <div class="guide-grid">
             <button @click="openHelp('dashboard')" class="guide-card"><span class="guide-icon"><i data-lucide="layout-dashboard"></i></span><b>Command Center</b><p>Understand attention, active deployments and last-known fleet state.</p></button>
-            <button @click="openHelp('deployments')" class="guide-card"><span class="guide-icon"><i data-lucide="rocket"></i></span><b>Deployment Center</b><p>Candidate review, transactional publication, verification and job history.</p></button>
+            <button @click="openHelp('deployments')" class="guide-card"><span class="guide-icon"><i data-lucide="rocket"></i></span><b>Deployment Center</b><p>Candidate review, transactional publication and job history.</p></button>
+            <button @click="openHelp('verification')" class="guide-card"><span class="guide-icon"><i data-lucide="shield-check"></i></span><b>Verification Center</b><p>Checkpoint-by-checkpoint evidence, exact failure stage, source and error code.</p></button>
             <button @click="openHelp('health')" class="guide-card"><span class="guide-icon"><i data-lucide="heart-pulse"></i></span><b>Health & Readiness</b><p>Availability, runtime, storage and health freshness.</p></button>
             <button @click="openHelp('targets')" class="guide-card"><span class="guide-icon"><i data-lucide="server"></i></span><b>Targets & Agents</b><p>Agent capabilities, secure remote execution and compatibility.</p></button>
             <button @click="openHelp('settings')" class="guide-card"><span class="guide-icon"><i data-lucide="settings-2"></i></span><b>Connections & Runtime</b><p>GitHub, Redis, cache policy and exact running build identity.</p></button>
