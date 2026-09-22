@@ -62,7 +62,7 @@ function app(){
     projects:[], targets:[], selectedId:null, releases:[], githubInfo:null, fileListing:null, health:null, audit:[],
     detailCache:{github:{},releases:{},health:{},files:{}}, requestPool:{},
     modal:null, busy:false, notice:'', error:'', operationTimer:null,
-    deploymentWatches:[], deploymentWatchTimer:null, deploymentWatchBusy:false,
+    deploymentWatches:[], deploymentJobs:[], deploymentWatchTimer:null, deploymentWatchBusy:false,
     operation:{active:false,type:'',title:'',message:'',percent:0,status:'idle',estimated:false},
     login:{username:'',password:'',totp:''},
     install:{name:'Administrator',username:'admin',password:'',confirm:'',totpSecret:''},
@@ -179,12 +179,14 @@ function app(){
       return labels[this.page]||'Control Plane'
     },
     get commandHeadline(){
+      if(this.backgroundDeploymentCount>0)return this.backgroundDeploymentCount+' deployment'+(this.backgroundDeploymentCount===1?' is':'s are')+' active'
       if(this.stats.attention>0)return this.stats.attention+' application'+(this.stats.attention===1?' needs':'s need')+' attention'
       if(this.stats.updates>0)return this.stats.updates+' deployable update'+(this.stats.updates===1?' is':'s are')+' ready'
       if(this.stats.pending>0)return 'Fleet is stable with '+this.stats.pending+' pending verification'
       return 'All known application states are healthy'
     },
     get commandSummary(){
+      if(this.backgroundDeploymentCount>0)return 'Deployment work continues server-side. You can navigate normally while DigiOps verifies authoritative state.'
       if(this.stats.attention>0)return 'Review attention items first, then verify health before deployment.'
       if(this.stats.updates>0)return 'Review exact workflow artifacts in Deployment Center before publishing.'
       return 'DigiOps is using last-known state. Remote checks remain explicit so the control plane stays fast.'
@@ -211,6 +213,7 @@ function app(){
         }
       }).sort((a,b)=>b.apps-a.apps)
     },
+    get recentDeploymentJobs(){return this.deploymentJobs.slice(0,12)},
     get recentDeployments(){
       return this.projects
         .filter(p=>p.lastDeploy&&p.lastDeploy!=='Never')
@@ -324,6 +327,16 @@ function app(){
       if(Number.isNaN(d.getTime()))return String(value)
       return new Intl.DateTimeFormat('en-IN',{dateStyle:'medium',timeStyle:'short'}).format(d)
     },
+    healthFreshness(p){
+      if(!p||!p.healthCheckedAt)return 'Not verified'
+      const ts=new Date(p.healthCheckedAt).getTime()
+      if(!Number.isFinite(ts))return 'Unknown age'
+      const age=Math.max(0,Date.now()-ts)
+      if(age<60000)return 'Verified <1m ago'
+      if(age<3600000)return 'Verified '+Math.floor(age/60000)+'m ago'
+      if(age<86400000)return 'Stale · '+Math.floor(age/3600000)+'h ago'
+      return 'Stale · '+Math.floor(age/86400000)+'d ago'
+    },
     releaseCommitShort(r){
       const value=r && r.commit ? String(r.commit) : ''
       return value && value!=='snapshot' ? value.slice(0,12) : 'snapshot'
@@ -354,6 +367,7 @@ function app(){
       try{
         const d=await api('./api/deployment-jobs.php')
         const server=(d.active||[]).map(job=>this.deploymentWatchFromJob(job))
+        this.deploymentJobs=Array.isArray(d.recent)?d.recent:[]
         const serverIds=new Set(server.map(w=>w.requestId))
         const now=Date.now()
         const justStarted=this.deploymentWatches.filter(w=>{
@@ -411,7 +425,7 @@ function app(){
               this.clearDeploymentWatch(watch.requestId)
               this.cacheDropProject(watch.projectId)
               let healthResult=null
-              try{healthResult=await api('./api/health.php?project='+encodeURIComponent(watch.projectId))}catch{}
+              try{healthResult=await api('./api/health.php?project='+encodeURIComponent(watch.projectId)+'&requestId='+encodeURIComponent(watch.requestId))}catch{}
               await this.loadProjects()
               if(this.selected&&this.selected.id===watch.projectId){
                 if(healthResult)this.health=this.cachePut('health',watch.projectId,healthResult)
