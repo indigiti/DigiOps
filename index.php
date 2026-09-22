@@ -14,9 +14,9 @@ declare(strict_types=1);
 session_name('DIGIOPSBOOTSTRAP');
 session_start();
 
-const DIGIOPS_CERTIFIED_ARTIFACT_ID = 10688758699;
-const DIGIOPS_CERTIFIED_SOURCE_SHA = 'd1bbc4b92d763c07026cc6617994e27d54283d37';
-const DIGIOPS_CERTIFIED_ARTIFACT_DIGEST = 'sha256:b83c2a2d67a34191ddc7ce77b0ba1646dc01fb8905dff2867e1301e05b718987';
+const DIGIOPS_VERIFIED_ARTIFACT_ID = 10688758699;
+const DIGIOPS_VERIFIED_SOURCE_SHA = 'd1bbc4b92d763c07026cc6617994e27d54283d37';
+const DIGIOPS_VERIFIED_ARTIFACT_DIGEST = 'sha256:b83c2a2d67a34191ddc7ce77b0ba1646dc01fb8905dff2867e1301e05b718987';
 
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
@@ -202,36 +202,36 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         if ($token === '') throw new RuntimeException('GitHub token is required.');
 
         $artifactJson = gh_request(
-            'https://api.github.com/repos/indigiti/DigiOps/actions/artifacts/' . DIGIOPS_CERTIFIED_ARTIFACT_ID,
+            'https://api.github.com/repos/indigiti/DigiOps/actions/artifacts/' . DIGIOPS_VERIFIED_ARTIFACT_ID,
             $token
         );
         $artifact = json_decode($artifactJson, true);
         if (!is_array($artifact) || empty($artifact['id'])) {
-            throw new RuntimeException('Certified DigiOps artifact metadata is unavailable.');
+            throw new RuntimeException('Verified DigiOps artifact metadata is unavailable.');
         }
         if (($artifact['expired'] ?? true) === true) {
-            throw new RuntimeException('Certified DigiOps artifact has expired; publish a fresh certified release.');
+            throw new RuntimeException('Verified DigiOps artifact has expired; publish a fresh verified release.');
         }
         if (($artifact['name'] ?? '') !== 'digiops-release') {
-            throw new RuntimeException('Certified artifact name mismatch.');
+            throw new RuntimeException('Verified artifact name mismatch.');
         }
 
         $tempBase = $publicDir . '/.digiops-bootstrap-' . bin2hex(random_bytes(5));
         $zipFile = $tempBase . '.zip';
         do_mkdir($tempBase);
         gh_request(
-            'https://api.github.com/repos/indigiti/DigiOps/actions/artifacts/' . DIGIOPS_CERTIFIED_ARTIFACT_ID . '/zip',
+            'https://api.github.com/repos/indigiti/DigiOps/actions/artifacts/' . DIGIOPS_VERIFIED_ARTIFACT_ID . '/zip',
             $token,
             $zipFile
         );
 
-        $expectedDigest = strtolower((string)DIGIOPS_CERTIFIED_ARTIFACT_DIGEST);
+        $expectedDigest = strtolower((string)DIGIOPS_VERIFIED_ARTIFACT_DIGEST);
         if (str_starts_with($expectedDigest, 'sha256:')) {
             $expectedSha = substr($expectedDigest, 7);
             $actualSha = strtolower((string)hash_file('sha256', $zipFile));
             if (!preg_match('/^[a-f0-9]{64}$/', $expectedSha) || !hash_equals($expectedSha, $actualSha)) {
                 @unlink($zipFile);
-                throw new RuntimeException('Certified artifact digest mismatch.');
+                throw new RuntimeException('Verified artifact digest mismatch.');
             }
         }
 
@@ -282,8 +282,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             $privateRoot . '/bootstrap-install.json',
             json_encode([
                 'installedAt' => date(DATE_ATOM),
-                'artifactId' => DIGIOPS_CERTIFIED_ARTIFACT_ID,
-                'sourceSha' => DIGIOPS_CERTIFIED_SOURCE_SHA,
+                'artifactId' => DIGIOPS_VERIFIED_ARTIFACT_ID,
+                'sourceSha' => DIGIOPS_VERIFIED_SOURCE_SHA,
                 'artifactCreatedAt' => $artifact['created_at'] ?? null,
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL,
             LOCK_EX
@@ -294,15 +294,15 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         file_put_contents(
             $publicDir . '/.digiops-installed',
             json_encode([
-                'artifactId'=>DIGIOPS_CERTIFIED_ARTIFACT_ID,
-                'sourceSha'=>DIGIOPS_CERTIFIED_SOURCE_SHA,
+                'artifactId'=>DIGIOPS_VERIFIED_ARTIFACT_ID,
+                'sourceSha'=>DIGIOPS_VERIFIED_SOURCE_SHA,
                 'installedAt'=>date(DATE_ATOM)
             ], JSON_UNESCAPED_SLASHES) . PHP_EOL,
             LOCK_EX
         );
 
-        $success = 'DigiOps certified runtime installed successfully. Reloading…';
-        header('Refresh: 2; url=./?release=' . DIGIOPS_CERTIFIED_ARTIFACT_ID);
+        $success = 'DigiOps verified runtime installed successfully. Reloading…';
+        header('Refresh: 2; url=./?release=' . DIGIOPS_VERIFIED_ARTIFACT_ID);
     } catch (Throwable $e) {
         $error = $e->getMessage();
     }
@@ -322,8 +322,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
 <body>
 <div class="card">
   <div class="brand"><div class="logo">DO</div><div><strong>DigiOps</strong><div class="muted">Cloudways bootstrap installer</div></div></div>
-  <p class="muted">This installer downloads the pinned certified <strong>digiops-release</strong> artifact and places the public and private runtime files in the correct Cloudways folders.</p>
-  <div class="path">Certified artifact: <?=DIGIOPS_CERTIFIED_ARTIFACT_ID?><br>Source: <?=htmlspecialchars(substr(DIGIOPS_CERTIFIED_SOURCE_SHA,0,12), ENT_QUOTES, 'UTF-8')?></div>
+  <p class="muted">This installer downloads the pinned verified <strong>digiops-release</strong> artifact and places the public and private runtime files in the correct Cloudways folders.</p>
+  <div class="path">Verified artifact: <?=DIGIOPS_VERIFIED_ARTIFACT_ID?><br>Source: <?=htmlspecialchars(substr(DIGIOPS_VERIFIED_SOURCE_SHA,0,12), ENT_QUOTES, 'UTF-8')?></div>
   <?php if ($error): ?><div class="notice error"><?=htmlspecialchars($error, ENT_QUOTES, 'UTF-8')?></div><?php endif; ?>
   <?php if ($success): ?><div class="notice success"><?=htmlspecialchars($success, ENT_QUOTES, 'UTF-8')?></div><?php endif; ?>
   <?php if (!$success): ?>
@@ -332,7 +332,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     <label for="token">GitHub fine-grained token</label>
     <input id="token" name="token" type="password" required autocomplete="off" placeholder="github_pat_…">
     <p class="muted">Required only for this bootstrap because the repository is private. The installer does not save this token.</p>
-    <button type="submit"><?= $installed ? 'Reinstall latest certified release' : 'Install DigiOps' ?></button>
+    <button type="submit"><?= $installed ? 'Reinstall latest verified release' : 'Install DigiOps' ?></button>
   </form>
   <?php endif; ?>
   <div class="path">Public: public_html/digiops/<br>Private: private_html/digiops/</div>
