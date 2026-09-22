@@ -2,7 +2,7 @@
 
 ## Release
 
-**v1.7.0 — Reliability Foundation**
+**v1.7.1 — Security & Release Integrity**
 
 ## Control plane
 
@@ -43,6 +43,7 @@
 - [x] Locked rate-limit counters
 - [x] Serialized hash-chain audit writes + audit head
 - [x] Encrypted GitHub/target secrets
+- [x] Serialized secret-vault mutations and master-key creation
 - [x] TOTP secrets stored in encrypted vault for new/migrated users
 
 ## Browser / session hardening
@@ -50,6 +51,8 @@
 - [x] Hardened session cookie flags
 - [x] Cookie path scoped to DigiOps
 - [x] CSRF protection
+- [x] Health probes require POST + CSRF and bind deployment request IDs to projects
+- [x] Local health probes use a configured canonical origin, never the request Host header
 - [x] CSP-compatible Alpine build
 - [x] Deployed Content-Security-Policy
 - [x] nosniff / frame denial / referrer / permissions headers
@@ -76,7 +79,7 @@
 - [x] route/workspace checks
 - [x] deployment reliability contract
 - [x] production package validation
-- [x] uploaded artifact validation
+- [x] uploaded artifact verification
 - [x] secret/data leak guard
 
 ## Deliberate constraints

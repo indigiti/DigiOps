@@ -18,53 +18,23 @@ final class UserStore
 
     public function hasUsers(): bool
     {
-        return count(Files::readJson($this->file, [])) > 0;
+        return count($this->readUsers()) > 0;
+    }
+
+    public function createInitialAdmin(string $username, string $name, string $password, ?string $totpSecret = null): array
+    {
+        return $this->createLocked($username, $name, $password, 'admin', $totpSecret, true);
     }
 
     public function create(string $username, string $name, string $password, string $role = 'admin', ?string $totpSecret = null): array
     {
-        $username = strtolower(trim($username));
-        if (!preg_match('/^[a-z0-9._-]{3,48}$/', $username)) throw new InvalidArgumentException('INVALID_USERNAME');
-        if (strlen($password) < 12) throw new InvalidArgumentException('PASSWORD_TOO_SHORT');
-        if (!in_array($role, ['admin','operator','viewer'], true)) throw new InvalidArgumentException('INVALID_ROLE');
-
-        foreach(Files::readJson($this->file,[]) as $existing){
-            if(($existing['username']??'')===$username) throw new RuntimeException('USER_EXISTS');
-        }
-        $id=bin2hex(random_bytes(8));
-        $normalizedTotp=$totpSecret ? strtoupper((string)preg_replace('/[^A-Z2-7]/', '', $totpSecret)) : '';
-
-        $record = [
-            'id' => $id,
-            'username' => $username,
-            'name' => trim($name) ?: $username,
-            'passwordHash' => password_hash($password, PASSWORD_DEFAULT),
-            'role' => $role,
-            'totpEnabled' => $normalizedTotp!=='',
-            'enabled' => true,
-            'createdAt' => date(DATE_ATOM),
-        ];
-
-        if($normalizedTotp!=='') (new SecretVault())->put('user.'.$id.'.totp',$normalizedTotp);
-
-        Files::withLock($this->file.'.lock', function() use ($record,$username): void {
-            $users=Files::readJson($this->file,[]);
-            foreach($users as $user){
-                if(($user['username']??'')===$username) throw new RuntimeException('USER_EXISTS');
-            }
-            $users[]=$record;
-            Files::writeJson($this->file,$users);
-        });
-
-        $public=$record;
-        unset($public['passwordHash']);
-        return $public;
+        return $this->createLocked($username, $name, $password, $role, $totpSecret, false);
     }
 
     public function verify(string $username, string $password, ?string $totp = null): ?array
     {
         $username = strtolower(trim($username));
-        foreach (Files::readJson($this->file, []) as $user) {
+        foreach ($this->readUsers() as $user) {
             if (($user['username'] ?? '') !== $username || !($user['enabled'] ?? false)) continue;
             if (!password_verify($password, (string)($user['passwordHash'] ?? ''))) return null;
 
@@ -95,7 +65,7 @@ final class UserStore
     public function all(): array
     {
         $out = [];
-        foreach (Files::readJson($this->file, []) as $user) {
+        foreach ($this->readUsers() as $user) {
             if(isset($user['totpSecret']) && !isset($user['totpEnabled']))$user['totpEnabled']=(string)$user['totpSecret']!=='';
             unset($user['passwordHash'], $user['totpSecret']);
             $out[] = $user;
@@ -103,10 +73,68 @@ final class UserStore
         return $out;
     }
 
+    private function createLocked(string $username, string $name, string $password, string $role, ?string $totpSecret, bool $requireEmpty): array
+    {
+        $username = strtolower(trim($username));
+        if (!preg_match('/^[a-z0-9._-]{3,48}$/', $username)) throw new InvalidArgumentException('INVALID_USERNAME');
+        if (strlen($password) < 12) throw new InvalidArgumentException('PASSWORD_TOO_SHORT');
+        if (!in_array($role, ['admin','operator','viewer'], true)) throw new InvalidArgumentException('INVALID_ROLE');
+
+        $id=bin2hex(random_bytes(8));
+        $normalizedTotp=$totpSecret ? strtoupper((string)preg_replace('/[^A-Z2-7]/', '', $totpSecret)) : '';
+        $record = [
+            'id' => $id,
+            'username' => $username,
+            'name' => trim($name) ?: $username,
+            'passwordHash' => password_hash($password, PASSWORD_DEFAULT),
+            'role' => $role,
+            'totpEnabled' => $normalizedTotp!=='',
+            'enabled' => true,
+            'createdAt' => date(DATE_ATOM),
+        ];
+
+        Files::withLock($this->file.'.lock', function() use ($record,$username,$requireEmpty): void {
+            $users=$this->readUsers();
+            if ($requireEmpty && count($users) > 0) throw new RuntimeException('ALREADY_INSTALLED');
+            foreach($users as $user){
+                if(($user['username']??'')===$username) throw new RuntimeException('USER_EXISTS');
+            }
+            $users[]=$record;
+            Files::writeJson($this->file,$users);
+        });
+
+        if($normalizedTotp!==''){
+            try{
+                (new SecretVault())->put('user.'.$id.'.totp',$normalizedTotp);
+            }catch(\Throwable $e){
+                Files::withLock($this->file.'.lock', function() use ($id): void {
+                    $users=array_values(array_filter($this->readUsers(), static fn(array $user): bool => ($user['id']??'')!==$id));
+                    Files::writeJson($this->file,$users);
+                });
+                throw $e;
+            }
+        }
+
+        $public=$record;
+        unset($public['passwordHash']);
+        return $public;
+    }
+
+    private function readUsers(): array
+    {
+        if (!is_file($this->file)) return [];
+        $raw=file_get_contents($this->file);
+        if ($raw === false) throw new RuntimeException('USER_STORE_READ_FAILED');
+        $users=json_decode($raw,true);
+        if (!is_array($users) || !array_is_list($users)) throw new RuntimeException('USER_STORE_INVALID');
+        foreach($users as $user) if(!is_array($user)) throw new RuntimeException('USER_STORE_INVALID');
+        return $users;
+    }
+
     private function removeLegacyTotp(string $id): void
     {
         Files::withLock($this->file.'.lock', function() use ($id): void {
-            $users=Files::readJson($this->file,[]);
+            $users=$this->readUsers();
             foreach($users as &$row){
                 if(($row['id']??'')!==$id)continue;
                 unset($row['totpSecret']);

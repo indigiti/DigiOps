@@ -4,6 +4,8 @@ on:
   push:
     branches: [main, develop]
   pull_request:
+  schedule:
+    - cron: '17 3 1 * *'
 
 permissions:
   contents: read
@@ -16,7 +18,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+      - run: npm ci
+      - run: npm audit --audit-level=high
       - run: npm run check:csp
       - run: node tools/check-pretty-routes.mjs
       - run: node tools/check-deploy-state-machine.mjs
@@ -24,13 +27,14 @@ jobs:
       - run: php tools/package-release.php
       - run: php tools/check-release-package.php
       - uses: actions/upload-artifact@v4
+        id: release_artifact
         with:
           name: digiops-release
           path: release/
           if-no-files-found: error
           include-hidden-files: true
 
-  artifact-certification:
+  artifact-verification:
     runs-on: ubuntu-latest
     needs: frontend
     steps:
@@ -52,7 +56,7 @@ jobs:
           grep -F "RewriteRule ^ index.html [L]" verified-release/public/.htaccess
           grep -F "Content-Security-Policy" verified-release/public/.htaccess
           grep -E 'src="/digiops/assets/|href="/digiops/' verified-release/public/index.html
-          echo "Uploaded artifact certification: PASS"
+          echo "Uploaded artifact verification: PASS"
 
   php:
     runs-on: ubuntu-latest
@@ -82,3 +86,72 @@ jobs:
             echo "Secret/data-like file found in repository"
             exit 1
           fi
+          if git grep -I -n -E -- '-----BEGIN (RSA |EC |OPENSSH |)?PRIVATE KEY-----|github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}' -- .; then
+            echo "Secret-like content found in repository"
+            exit 1
+          fi
+
+  cloudways-sync:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: [frontend, artifact-verification, php, security]
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudways
+          fetch-depth: 0
+      - name: Refresh Cloudways verified release pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          VERSION="$(git show origin/main:package.json | python -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
+          ARTIFACT_JSON="$(gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" --jq '[.artifacts[] | select(.name=="digiops-release" and .expired==false)] | max_by(.id)')"
+          ARTIFACT_ID="$(printf '%s' "$ARTIFACT_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+          ARTIFACT_DIGEST="$(printf '%s' "$ARTIFACT_JSON" | python -c 'import json,sys; print(json.load(sys.stdin).get("digest") or "")')"
+          if [ -z "$ARTIFACT_ID" ] || [ -z "$ARTIFACT_DIGEST" ]; then
+            echo "Verified release artifact metadata is unavailable"
+            exit 1
+          fi
+          VERSION="$VERSION" ARTIFACT_ID="$ARTIFACT_ID" ARTIFACT_DIGEST="$ARTIFACT_DIGEST" SOURCE_SHA="$SOURCE_SHA" python <<'PY'
+          import os, re
+          from pathlib import Path
+
+          version=os.environ["VERSION"]
+          artifact_id=os.environ["ARTIFACT_ID"]
+          digest=os.environ["ARTIFACT_DIGEST"]
+          sha=os.environ["SOURCE_SHA"]
+
+          index=Path("index.php")
+          text=index.read_text()
+          text=re.sub(r"const DIGIOPS_VERIFIED_ARTIFACT_ID = \d+;", f"const DIGIOPS_VERIFIED_ARTIFACT_ID = {artifact_id};", text)
+          text=re.sub(r"const DIGIOPS_VERIFIED_SOURCE_SHA = '[a-f0-9]{40}';", f"const DIGIOPS_VERIFIED_SOURCE_SHA = '{sha}';", text)
+          text=re.sub(r"const DIGIOPS_VERIFIED_ARTIFACT_DIGEST = 'sha256:[a-f0-9]{64}';", f"const DIGIOPS_VERIFIED_ARTIFACT_DIGEST = '{digest}';", text)
+          index.write_text(text)
+
+          deployment=Path("DEPLOYMENT.txt")
+          text=deployment.read_text()
+          text=re.sub(r"- version: DigiOps v[^\n]+", f"- version: DigiOps v{version}", text)
+          text=re.sub(r"- main commit: [a-f0-9]{40}", f"- main commit: {sha}", text)
+          text=re.sub(r"- artifact id: \d+", f"- artifact id: {artifact_id}", text)
+          text=re.sub(r"- artifact digest: sha256:[a-f0-9]{64}", f"- artifact digest: {digest}", text)
+          deployment.write_text(text)
+          PY
+          php -l index.php
+          if git diff --quiet -- index.php DEPLOYMENT.txt; then
+            echo "Cloudways pin already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.php DEPLOYMENT.txt
+          git commit -m "deploy: pin verified DigiOps v$VERSION runtime"
+          git push origin HEAD:cloudways
+

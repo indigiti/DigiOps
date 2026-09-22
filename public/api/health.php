@@ -10,9 +10,15 @@ use DigiOps\Registry\ProjectRegistry;
 use DigiOps\Targets\TargetService;
 use DigiOps\Targets\RemoteDeploymentDriver;
 
-Session::requireRole();
-$id=(string)($_GET['project']??'');
-$requestId=strtolower(trim((string)($_GET['requestId']??'')));
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') JsonResponse::send(['error'=>'METHOD_NOT_ALLOWED'],405);
+Session::requireRole(['admin','operator']);
+Session::assertCsrf();
+
+$data=json_decode(file_get_contents('php://input') ?: '',true);
+if(!is_array($data)) JsonResponse::send(['error'=>'INVALID_JSON'],400);
+
+$id=(string)($data['project']??'');
+$requestId=strtolower(trim((string)($data['requestId']??'')));
 if ($id==='') JsonResponse::send(['error'=>'PROJECT_REQUIRED'],400);
 if($requestId!=='' && !preg_match('/^[a-f0-9]{32}$/',$requestId)) JsonResponse::send(['error'=>'REQUEST_ID_INVALID'],400);
 
@@ -20,8 +26,15 @@ try {
     $registry=new ProjectRegistry();
     $project=$registry->find($id);
     if(!$project) throw new RuntimeException('PROJECT_NOT_FOUND');
-    $target=(new TargetService())->forProject($id);
 
+    $jobs=new DeploymentJobRepository();
+    if($requestId!==''){
+        $job=$jobs->get($requestId);
+        if(!$job) JsonResponse::send(['error'=>'DEPLOYMENT_JOB_NOT_FOUND'],404);
+        if(($job['project']??'')!==($project['id']??'')) JsonResponse::send(['error'=>'DEPLOYMENT_JOB_PROJECT_MISMATCH'],409);
+    }
+
+    $target=(new TargetService())->forProject($id);
     if(($target['id']??'local')==='local'){
         $result=(new HealthService())->probe($id);
     }else{
@@ -35,16 +48,14 @@ try {
     }
 
     if($requestId!==''){
-        try{
-            (new DeploymentJobRepository())->patch($requestId,[
-                'health'=>[
-                    'ok'=>(bool)($result['ok']??false),
-                    'checkedAt'=>(string)($result['checkedAt']??date(DATE_ATOM)),
-                    'http'=>$result['http']??null,
-                ],
-                'phase'=>($result['ok']??false)?'health-verified':'health-attention',
-            ]);
-        }catch(Throwable){}
+        $jobs->patch($requestId,[
+            'health'=>[
+                'ok'=>(bool)($result['ok']??false),
+                'checkedAt'=>(string)($result['checkedAt']??date(DATE_ATOM)),
+                'http'=>$result['http']??null,
+            ],
+            'phase'=>($result['ok']??false)?'health-verified':'health-attention',
+        ]);
     }
 
     JsonResponse::send($result);

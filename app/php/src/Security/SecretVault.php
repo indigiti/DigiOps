@@ -20,9 +20,11 @@ final class SecretVault
     public function put(string $name, string $value): void
     {
         if (!preg_match('/^[a-z0-9._-]{2,80}$/i', $name)) throw new RuntimeException('INVALID_SECRET_NAME');
-        $all = Files::readJson($this->file, []);
-        $all[$name] = $this->encrypt($value);
-        Files::writeJson($this->file, $all);
+        $encrypted=$this->encrypt($value);
+        Files::mutateJson($this->file, [], static function(array $all) use ($name,$encrypted): array {
+            $all[$name]=$encrypted;
+            return $all;
+        });
     }
 
     public function get(string $name): ?string
@@ -34,9 +36,10 @@ final class SecretVault
 
     public function delete(string $name): void
     {
-        $all = Files::readJson($this->file, []);
-        unset($all[$name]);
-        Files::writeJson($this->file, $all);
+        Files::mutateJson($this->file, [], static function(array $all) use ($name): array {
+            unset($all[$name]);
+            return $all;
+        });
     }
 
     public function has(string $name): bool
@@ -51,13 +54,20 @@ final class SecretVault
             $decoded = base64_decode($env, true);
             if ($decoded !== false && strlen($decoded) >= 32) return substr($decoded, 0, 32);
         }
+
         $file = DIGIOPS_PRIVATE_ROOT . '/vault/master.key';
-        if (!is_file($file)) {
+        Files::withLock($file.'.lock', static function() use ($file): void {
+            if (is_file($file)) return;
             Files::ensureDir(dirname($file), 0700);
-            if (file_put_contents($file, base64_encode(random_bytes(32)), LOCK_EX) === false) throw new RuntimeException('MASTER_KEY_CREATE_FAILED');
+            if (file_put_contents($file, base64_encode(random_bytes(32)), LOCK_EX) === false) {
+                throw new RuntimeException('MASTER_KEY_CREATE_FAILED');
+            }
             @chmod($file, 0600);
-        }
-        $decoded = base64_decode(trim((string)file_get_contents($file)), true);
+        });
+
+        $raw=file_get_contents($file);
+        if($raw===false) throw new RuntimeException('MASTER_KEY_READ_FAILED');
+        $decoded = base64_decode(trim($raw), true);
         if ($decoded === false || strlen($decoded) < 32) throw new RuntimeException('MASTER_KEY_INVALID');
         return substr($decoded, 0, 32);
     }
@@ -79,22 +89,31 @@ final class SecretVault
     private function decrypt(array $record): string
     {
         if (($record['alg'] ?? '') === 'secretbox' && function_exists('sodium_crypto_secretbox_open')) {
-            $plain = sodium_crypto_secretbox_open(base64_decode((string)$record['data']), base64_decode((string)$record['nonce']), $this->key);
+            $data=$this->decode((string)($record['data']??''));
+            $nonce=$this->decode((string)($record['nonce']??''));
+            $plain = sodium_crypto_secretbox_open($data, $nonce, $this->key);
             if ($plain === false) throw new RuntimeException('DECRYPT_FAILED');
             return $plain;
         }
         if (($record['alg'] ?? '') === 'aes-256-gcm') {
             $plain = openssl_decrypt(
-                base64_decode((string)$record['data']),
+                $this->decode((string)($record['data']??'')),
                 'aes-256-gcm',
                 $this->key,
                 OPENSSL_RAW_DATA,
-                base64_decode((string)$record['iv']),
-                base64_decode((string)$record['tag'])
+                $this->decode((string)($record['iv']??'')),
+                $this->decode((string)($record['tag']??''))
             );
             if ($plain === false) throw new RuntimeException('DECRYPT_FAILED');
             return $plain;
         }
         throw new RuntimeException('UNSUPPORTED_SECRET_FORMAT');
+    }
+
+    private function decode(string $value): string
+    {
+        $decoded=base64_decode($value,true);
+        if($decoded===false) throw new RuntimeException('DECRYPT_FAILED');
+        return $decoded;
     }
 }

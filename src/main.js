@@ -434,7 +434,7 @@ function app(){
               this.clearDeploymentWatch(watch.requestId)
               this.cacheDropProject(watch.projectId)
               let healthResult=null
-              try{healthResult=await api('./api/health.php?project='+encodeURIComponent(watch.projectId)+'&requestId='+encodeURIComponent(watch.requestId))}catch{}
+              try{healthResult=await api('./api/health.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:watch.projectId,requestId:watch.requestId})})}catch{}
               await this.loadProjects()
               if(this.selected&&this.selected.id===watch.projectId){
                 if(healthResult)this.health=this.cachePut('health',watch.projectId,healthResult)
@@ -844,7 +844,7 @@ function app(){
         this.startOperation('health','Running health check','Checking HTTP, storage and runtime status…',20,false)
       }
       try{
-        this.health=await this.singleFlight('health:'+this.selected.id,()=>api('./api/health.php?project='+encodeURIComponent(this.selected.id)))
+        this.health=await this.singleFlight('health:'+this.selected.id,()=>api('./api/health.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({project:this.selected.id})}))
         this.cachePut('health',this.selected.id,this.health)
         if(!silent)this.setOperation(78,'Refreshing application health state…')
         await this.loadProjects()
