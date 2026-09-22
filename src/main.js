@@ -45,7 +45,12 @@ const api=async(url,options={})=>{
     const type=(res.headers.get('content-type')||'unknown').split(';')[0].replace(/[^a-z0-9.+/-]/gi,'_')
     throw new Error('INVALID_RESPONSE_HTTP_'+res.status+'_TYPE_'+type+'_BYTES_'+raw.length)
   }
-  if(!res.ok) throw new Error(data.error||('HTTP_'+res.status))
+  if(!res.ok){
+    const error=new Error(data.error||('HTTP_'+res.status))
+    error.httpStatus=res.status
+    error.payload=data
+    throw error
+  }
   return data
 }
 
