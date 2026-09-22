@@ -5,7 +5,7 @@ Cloudways settings:
 - Branch: cloudways
 - Deployment Path: public_html/digiops/
 
-Certified runtime:
+Pinned verified runtime:
 - version: DigiOps v1.7.0
 - main commit: d1bbc4b92d763c07026cc6617994e27d54283d37
 - artifact: digiops-release
@@ -15,7 +15,7 @@ Certified runtime:
 After Cloudways Pull, open:
 https://stage.digiti.in/digiops/?bootstrap=1
 
-The bootstrap installer downloads the certified digiops-release artifact pinned by this branch,
+The bootstrap installer downloads the verified digiops-release artifact pinned by this branch,
 installs public files into public_html/digiops/ and private runtime files into
 private_html/digiops/. The bootstrap GitHub token is used only for this install request
 and is not stored.
