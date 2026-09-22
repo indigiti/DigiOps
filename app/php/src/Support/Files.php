@@ -23,6 +23,34 @@ final class Files
         return is_array($data) ? $data : $default;
     }
 
+    public static function withLock(string $lockFile, callable $callback): mixed
+    {
+        self::ensureDir(dirname($lockFile));
+        $fp = fopen($lockFile, 'c+');
+        if (!$fp) throw new RuntimeException('LOCK_OPEN_FAILED');
+        if (!flock($fp, LOCK_EX)) {
+            fclose($fp);
+            throw new RuntimeException('LOCK_ACQUIRE_FAILED');
+        }
+        try {
+            return $callback();
+        } finally {
+            flock($fp, LOCK_UN);
+            fclose($fp);
+        }
+    }
+
+    public static function mutateJson(string $file, array $default, callable $mutator): array
+    {
+        return self::withLock($file . '.lock', static function() use ($file, $default, $mutator): array {
+            $current = self::readJson($file, $default);
+            $next = $mutator($current);
+            if (!is_array($next)) throw new RuntimeException('JSON_MUTATOR_INVALID');
+            self::writeJson($file, $next);
+            return $next;
+        });
+    }
+
     public static function writeJson(string $file, array $data): void
     {
         self::ensureDir(dirname($file));
