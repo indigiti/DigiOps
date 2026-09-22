@@ -33,6 +33,7 @@ final class RemoteAgentClient
             'deploy-commit'=>300,
             'rollback'=>180,
             'deploy-chunk'=>45,
+            'deployment-status'=>5,
             default=>30,
         };
         $ch=curl_init($url);
