@@ -21,7 +21,7 @@ final class SecretVault
     {
         if (!preg_match('/^[a-z0-9._-]{2,80}$/i', $name)) throw new RuntimeException('INVALID_SECRET_NAME');
         $encrypted=$this->encrypt($value);
-        Files::mutateJson($this->file, [], static function(array $all) use ($name,$encrypted): array {
+        Files::mutateJsonStrict($this->file, [], static function(array $all) use ($name,$encrypted): array {
             $all[$name]=$encrypted;
             return $all;
         });
@@ -29,14 +29,14 @@ final class SecretVault
 
     public function get(string $name): ?string
     {
-        $all = Files::readJson($this->file, []);
+        $all = Files::readJsonStrict($this->file, []);
         if (!isset($all[$name]) || !is_array($all[$name])) return null;
         return $this->decrypt($all[$name]);
     }
 
     public function delete(string $name): void
     {
-        Files::mutateJson($this->file, [], static function(array $all) use ($name): array {
+        Files::mutateJsonStrict($this->file, [], static function(array $all) use ($name): array {
             unset($all[$name]);
             return $all;
         });
