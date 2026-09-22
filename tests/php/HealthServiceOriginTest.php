@@ -15,15 +15,19 @@ spl_autoload_register(static function(string $class): void {
 });
 
 use DigiOps\Health\HealthService;
+use DigiOps\Registry\ProjectRegistry;
 use DigiOps\Support\Files;
 
-$service=new HealthService();
+$registry=new ProjectRegistry($root.'/private/registry/projects.json');
+$registry->upsert(['id'=>'qsyn','name'=>'QSYN','repo'=>'indigiti/syndi','branch'=>'main','healthPath'=>'/']);
+$service=new HealthService($registry);
 $method=new ReflectionMethod(HealthService::class,'canonicalOrigin');
 $method->setAccessible(true);
 
 putenv('DIGIOPS_CANONICAL_ORIGIN=https://stage.example.test/');
 putenv('APP_URL');
 if($method->invoke($service)!=='https://stage.example.test') throw new RuntimeException('CANONICAL_ORIGIN_NORMALIZATION_FAILED');
+if($service->healthUrl('qsyn')!=='https://stage.example.test/qsyn/') throw new RuntimeException('HEALTH_URL_RESOLUTION_FAILED');
 
 putenv('DIGIOPS_CANONICAL_ORIGIN');
 $_SERVER['HTTP_HOST']='169.254.169.254';
