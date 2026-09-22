@@ -2,7 +2,7 @@
 declare(strict_types=1);
 require_once __DIR__ . '/_bootstrap.php';
 
-@set_time_limit(300);
+@set_time_limit(2100);
 @ignore_user_abort(true);
 header('Cache-Control: no-store, private');
 header('X-Accel-Buffering: no');
@@ -147,7 +147,7 @@ try {
     $jobs->patch($requestId,['state'=>'running','phase'=>'downloading-artifact','progress'=>20,'targetId'=>(string)($target['id']??'local'),'verificationSource'=>'github-artifact']);
     Files::ensureDir(DIGIOPS_PRIVATE_ROOT . '/tmp');
     $zip=DIGIOPS_PRIVATE_ROOT . '/tmp/artifact-' . bin2hex(random_bytes(6)) . '.zip';
-    $client->downloadArtifact($project['repo'],$artifactId,$zip);
+    $client->downloadArtifact($project['repo'],$artifactId,$zip,$artifactDigest);
     $artifactBytes=filesize($zip);
     if($artifactBytes===false || $artifactBytes<1) throw new RuntimeException('ARTIFACT_DOWNLOAD_EMPTY');
 

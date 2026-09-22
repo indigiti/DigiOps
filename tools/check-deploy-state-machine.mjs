@@ -11,6 +11,7 @@ const switcher=read('app/php/src/Deploy/AtomicReleaseSwitcher.php');
 const jobRepo=read('app/php/src/Deploy/DeploymentJobRepository.php');
 const deploy=read('public/api/deploy.php');
 const health=read('public/api/health.php');
+const githubClient=read('app/php/src/GitHub/GitHubClient.php');
 
 const checks=[
   ['UI hands aborted deploys to background verification', ui.includes("aborted?'DEPLOY_RESPONSE_TIMEOUT'") && ui.includes('queueDeploymentWatch')],
@@ -42,6 +43,9 @@ const checks=[
   ['Same-commit retries cannot use registry-only confirmation', status.includes("$requestId==='' && $registryCommit===$commit")],
   ['Preflight checks local deployment prerequisites', deploy.includes('PREFLIGHT_ZIP_EXTENSION_MISSING') && deploy.includes('PREFLIGHT_PRIVATE_STORAGE_NOT_WRITABLE') && deploy.includes('PREFLIGHT_DISK_SPACE_LOW')],
   ['Artifact digest is verified when GitHub provides SHA-256', deploy.includes('ARTIFACT_DIGEST_MISMATCH') && deploy.includes("str_starts_with($artifactDigest,'sha256:')")],
+  ['Large artifact downloads use resilient timeout and retries', githubClient.includes('ARTIFACT_TRANSFER_TIMEOUT = 600') && githubClient.includes('ARTIFACT_ATTEMPTS = 3') && githubClient.includes('ARTIFACT_BLOB_INCOMPLETE')],
+  ['Artifact downloads promote only after validation', githubClient.includes("$target.'.part-'") && githubClient.includes('assertZipFile($part)') && githubClient.includes('hash_equals($expected,$actual)') && githubClient.includes('rename($part,$target)')],
+  ['Deploy execution window covers artifact retry budget', deploy.includes('@set_time_limit(2100)')],
 ];
 
 const failed=checks.filter(([,ok])=>!ok).map(([name])=>name);

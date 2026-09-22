@@ -402,6 +402,8 @@ function app(){
       if(/DIGEST_MISMATCH/.test(code))return 'The downloaded artifact does not match the expected SHA-256 digest.'
       if(/ZIP|ENTRYPOINT|PAYLOAD|SYMLINK|TRAVERSAL/.test(code))return 'The release package failed structural or payload validation.'
       if(/TARGET_AGENT_UPGRADE_REQUIRED/.test(code))return 'The remote DigiOps agent is missing a required deployment capability.'
+      if(/ARTIFACT_(?:API|BLOB)_FAILED_.*_CURL_28|ARTIFACT_BLOB_INCOMPLETE/.test(code))return 'GitHub artifact transfer timed out or ended early. DigiOps retries transient artifact transfers automatically with a 600-second transfer window per attempt.'
+      if(/ARTIFACT_(?:SIZE_MISMATCH|PROMOTE_FAILED)/.test(code))return 'The artifact download completed but failed local completeness or promotion checks before deployment began.'
       if(/TARGET_CONNECT|CURLE_|TIMEOUT|HTTP_50|INVALID_RESPONSE|NetworkError|Failed to fetch/i.test(code))return 'DigiOps could not obtain authoritative target confirmation. The target may still be completing the deployment.'
       if(/OVERLAY_TYPE_CONFLICT/.test(code))return 'A private release path changed between file and directory. DigiOps stopped before modifying the live private tree.'
       if(/OVERLAY_.*NOT_WRITABLE|COPY_TARGET_.*NOT_WRITABLE/.test(code))return 'Cloudways cannot write the indicated live destination path. Check ownership/permissions for the exact relative file shown.'
