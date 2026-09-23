@@ -14,13 +14,22 @@ function fail(string $error,int $status=400): never {
         $GLOBALS['DIGIOPS_MARKING_DEPLOY_FAILURE']=true;
         try{
             $slug=(string)($active['slug']??'');
-            if($slug!=='')setDeploymentState($slug,'failed','failed',100,[
-                'commit'=>(string)($active['commit']??''),
-                'artifactId'=>(string)($active['artifactId']??''),
-                'requestId'=>(string)($active['requestId']??''),
-                'uploadId'=>(string)($active['uploadId']??''),
-                'error'=>$error,
-            ]);
+            if($slug!==''){
+                $current=deploymentState($slug);
+                $phase=(string)($current['phase']??'failed');
+                setDeploymentState($slug,'failed',$phase!==''?$phase:'failed',100,[
+                    'commit'=>(string)($active['commit']??''),
+                    'artifactId'=>(string)($active['artifactId']??''),
+                    'requestId'=>(string)($active['requestId']??''),
+                    'uploadId'=>(string)($active['uploadId']??''),
+                    'publication'=>(string)($current['publication']??''),
+                    'runtimeActivation'=>str_starts_with($phase,'activating')||str_starts_with($phase,'certifying')
+                        ? 'failed'
+                        : (string)($current['runtimeActivation']??''),
+                    'runtimeCertification'=>(string)($current['runtimeCertification']??''),
+                    'error'=>$error,
+                ]);
+            }
         }catch(Throwable){}
         $GLOBALS['DIGIOPS_MARKING_DEPLOY_FAILURE']=false;
     }
@@ -108,6 +117,38 @@ function deploymentStateIsActive(array $state): bool {
     return is_int($updated) && $updated >= time()-900;
 }
 function listReleases(string $slug): array { $dir=projectRuntime($slug).'/releases';if(!is_dir($dir))return[];$out=[];foreach(array_diff(scandir($dir)?:[],['.','..']) as $name){$path=$dir.'/'.$name;if(!is_dir($path))continue;$meta=readJsonFile($path.'/meta.json',['id'=>$name]);$meta['size']=dirSize($path.'/public')+(is_dir($path.'/private')?dirSize($path.'/private'):0);$out[]=$meta;}usort($out,fn($a,$b)=>strcmp((string)($b['createdAt']??''),(string)($a['createdAt']??'')));return$out; }
+function activateRuntimeIfPresent(string $privateTarget,string $expectedCommit): array {
+    $hook=rtrim($privateTarget,'/').'/scripts/digiops-runtime-activate.py';
+    if(!is_file($hook))return['required'=>false,'status'=>'NOT_REQUIRED'];
+    $spec=[0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']];
+    $proc=@proc_open(['python3',$hook,'--expected-commit',$expectedCommit],$spec,$pipes,$privateTarget);
+    if(!is_resource($proc))throw new RuntimeException('RUNTIME_ACTIVATION_START_FAILED');
+    fclose($pipes[0]);stream_set_blocking($pipes[1],false);stream_set_blocking($pipes[2],false);
+    $stdout='';$stderr='';$deadline=microtime(true)+150;$exit=null;
+    try{
+        while(true){
+            $stdout.=(string)stream_get_contents($pipes[1]);$stderr.=(string)stream_get_contents($pipes[2]);
+            $status=proc_get_status($proc);
+            if(!($status['running']??false)){$exit=(int)($status['exitcode']??-1);break;}
+            if(microtime(true)>=$deadline){
+                @proc_terminate($proc,15);usleep(250000);$status=proc_get_status($proc);
+                if($status['running']??false)@proc_terminate($proc,9);
+                throw new RuntimeException('RUNTIME_ACTIVATION_TIMEOUT');
+            }
+            usleep(100000);
+        }
+        $stdout.=(string)stream_get_contents($pipes[1]);$stderr.=(string)stream_get_contents($pipes[2]);
+    } finally {
+        fclose($pipes[1]);fclose($pipes[2]);$closed=proc_close($proc);if($exit===null&&is_int($closed))$exit=$closed;
+    }
+    $lines=array_values(array_filter(array_map('trim',preg_split('/\R/',$stdout)?:[]),fn($v)=>$v!==''));
+    $result=[];if($lines){$decoded=json_decode((string)end($lines),true);if(is_array($decoded))$result=$decoded;}
+    if($exit!==0||empty($result['ok'])){
+        $detail=trim($stderr!==''?$stderr:$stdout);if($detail==='')$detail='activation hook returned no certification';
+        throw new RuntimeException('RUNTIME_ACTIVATION_FAILED:'.substr($detail,0,1800));
+    }
+    return['required'=>true,'status'=>'SUCCESS']+$result;
+}
 function publishRelease(array $payload,string $zipFile): array {
     [$slug,$publicTarget,$privateTarget]=projectPaths($payload);$runtime=projectRuntime($slug);ensureDir($runtime,0700);$lock=fopen($runtime.'/deploy.lock','c+');if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))fail('DEPLOYMENT_LOCKED',409);
     $stateMeta=['commit'=>(string)($payload['commit']??''),'artifactId'=>(string)($payload['artifactId']??''),'artifactDigest'=>(string)($payload['artifactDigest']??''),'downloadSha256'=>(string)($payload['downloadSha256']??''),'requestId'=>(string)($payload['requestId']??''),'uploadId'=>(string)($payload['uploadId']??'')];
@@ -124,10 +165,24 @@ function publishRelease(array $payload,string $zipFile): array {
         $tmp=dirname($publicTarget).'/.'.$slug.'.publish-'.bin2hex(random_bytes(4));copyDir($releaseDir.'/public',$tmp);
         setDeploymentState($slug,'running','switching',94,$stateMeta+['release'=>$releaseId]);
         if($privatePayload!==null){ensureDir($privateTarget);copyDir($releaseDir.'/private',$privateTarget);}atomicSwitchDir($tmp,$publicTarget,$slug);
+        setDeploymentState($slug,'running','activating-runtime',97,$stateMeta+['release'=>$releaseId,'publication'=>'success','runtimeActivation'=>'running']);
+        $activation=activateRuntimeIfPresent($privateTarget,(string)($payload['commit']??''));
+        setDeploymentState($slug,'running','certifying-runtime',99,$stateMeta+[
+            'release'=>$releaseId,
+            'publication'=>'success',
+            'runtimeActivation'=>$activation['required']?'success':'not-required',
+            'runtimeCertification'=>$activation['required']?'success':'not-required',
+            'activation'=>$activation,
+        ]);
         $lastDeploy=date(DATE_ATOM);
         writeJsonFile($runtime.'/current.json',['release'=>$releaseId,'commit'=>(string)($payload['commit']??''),'requestId'=>(string)($payload['requestId']??''),'lastDeploy'=>$lastDeploy]);
-        setDeploymentState($slug,'deployed','complete',100,$stateMeta+['release'=>$releaseId,'lastDeploy'=>$lastDeploy]);
-        removeTree($stage);return['release'=>$releaseId];
+        setDeploymentState($slug,'deployed','complete',100,$stateMeta+[
+            'release'=>$releaseId,'lastDeploy'=>$lastDeploy,'publication'=>'success',
+            'runtimeActivation'=>$activation['required']?'success':'not-required',
+            'runtimeCertification'=>$activation['required']?'success':'not-required',
+            'activation'=>$activation,
+        ]);
+        removeTree($stage);return['release'=>$releaseId,'activation'=>$activation];
     } finally { flock($lock,LOCK_UN);fclose($lock); }
 }
 $raw=(string)file_get_contents('php://input');verifySignature($raw);$data=json_decode($raw,true);if(!is_array($data))fail('INVALID_JSON');$action=(string)($data['action']??'');$payload=is_array($data['payload']??null)?$data['payload']:[];
