@@ -15,6 +15,7 @@ final class RemoteDeploymentDriver
         $size=filesize($zip);
         if($size===false) throw new RuntimeException('ARTIFACT_SIZE_FAILED');
         $sha=hash_file('sha256',$zip);
+        $requiresRuntimeActivation=self::artifactRequiresRuntimeActivation($zip);
 
         $start=$this->targets->remoteRequest($projectId,'deploy-start',[
             'project'=>$projectId,
@@ -53,18 +54,54 @@ final class RemoteDeploymentDriver
         }
 
         try {
-            return $this->targets->remoteRequest($projectId,'deploy-commit',[
+            $result=$this->targets->remoteRequest($projectId,'deploy-commit',[
                 'project'=>$projectId,
                 'uploadId'=>$uploadId,
                 'publicPath'=>$project['publicPath'],
                 'privatePath'=>$project['privatePath'],
             ]);
+            if($requiresRuntimeActivation){
+                $activation=is_array($result['activation']??null)?$result['activation']:[];
+                if(($activation['required']??false)!==true || strtoupper(trim((string)($activation['status']??'')))!=='SUCCESS'){
+                    throw new RuntimeException('REMOTE_RUNTIME_ACTIVATION_NOT_CERTIFIED');
+                }
+                $expectedCommit=strtolower(trim((string)($meta['commit']??'')));
+                $runningCommit=strtolower(trim((string)($activation['running_commit']??'')));
+                if($expectedCommit!=='' && (!preg_match('/^[a-f0-9]{40}$/',$runningCommit) || !hash_equals($expectedCommit,$runningCommit))){
+                    throw new RuntimeException('REMOTE_RUNNING_COMMIT_MISMATCH');
+                }
+            }
+            return $result;
         } catch (RuntimeException $e) {
             $message=$e->getMessage();
             if (self::isUncertainCommitError($message)) {
                 throw new RuntimeException('REMOTE_COMMIT_UNCERTAIN_'.$message, 0, $e);
             }
             throw $e;
+        }
+    }
+
+    private static function artifactRequiresRuntimeActivation(string $zip): bool
+    {
+        if(!class_exists('ZipArchive')) throw new RuntimeException('ZIP_EXTENSION_UNAVAILABLE');
+        $archive=new \ZipArchive();
+        if($archive->open($zip)!==true) throw new RuntimeException('INVALID_ZIP');
+        try{
+            $manifestName=null;
+            for($i=0;$i<$archive->numFiles;$i++){
+                $name=str_replace('\\','/',(string)$archive->getNameIndex($i));
+                if($name==='RELEASE.json'){$manifestName=$name;break;}
+                if($manifestName===null && str_ends_with($name,'/RELEASE.json'))$manifestName=$name;
+            }
+            if($manifestName===null)return false;
+            $raw=$archive->getFromName($manifestName);
+            if(!is_string($raw)||$raw==='')return false;
+            $manifest=json_decode($raw,true);
+            if(!is_array($manifest))return false;
+            $runtime=is_array($manifest['runtimeActivation']??null)?$manifest['runtimeActivation']:[];
+            return trim((string)($runtime['activationHook']??''))!=='';
+        } finally {
+            $archive->close();
         }
     }
 
