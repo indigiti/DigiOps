@@ -139,7 +139,7 @@ try {
     } else {
         $probe=$targetService->test((string)$target['id']);
         $caps=array_values(array_filter((array)($probe['capabilities']??[]),'is_string'));
-        foreach(['deploy-chunked','deployment-status','deployment-request-id','atomic-switch-v1'] as $requiredCapability){
+        foreach(['deploy-chunked','deployment-status','deployment-request-id','atomic-switch-v1','runtime-activation-v1'] as $requiredCapability){
             if(!in_array($requiredCapability,$caps,true)) throw new RuntimeException('TARGET_AGENT_UPGRADE_REQUIRED_'.$requiredCapability);
         }
     }
