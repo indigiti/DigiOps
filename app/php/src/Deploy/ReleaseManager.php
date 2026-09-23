@@ -88,12 +88,13 @@ final class ReleaseManager
             $privateTarget = DIGIOPS_APP_HOME . '/' . $project['privatePath'];
             Files::ensureDir($stage);
             Files::ensureDir($releases);
+            $activationPlan=['required'=>false,'transport'=>'none'];
 
             $this->extractSafe($zipFile, $stage);
             [$publicPayload, $privatePayload] = $this->detectPayloads($stage);
             $this->validatePayload($publicPayload);
             $this->validatePrivatePayload($slug,$privatePayload);
-            $this->assertRuntimeActivationCapability($privatePayload);
+            $activationPlan=$this->runtimeActivationPlan($privatePayload,$privateTarget);
 
             $this->writeDeploymentState($slug,'running','snapshotting',52,$stateMeta+['release'=>$releaseId]);
             if (is_dir($publicTarget) && $this->hasEntries($publicTarget)) {
@@ -166,7 +167,8 @@ final class ReleaseManager
             ]);
             $activation=$this->activateRuntimeIfPresent(
                 $privateTarget,
-                (string)($meta['commit']??'')
+                (string)($meta['commit']??''),
+                $activationPlan
             );
             $this->writeDeploymentState($slug,'running','certifying-runtime',99,$stateMeta+[
                 'release'=>$releaseId,
@@ -303,18 +305,16 @@ final class ReleaseManager
         return $out;
     }
 
-    private function assertRuntimeActivationCapability(?string $privatePayload): void
+    private function runtimeActivationPlan(?string $privatePayload,string $privateTarget): array
     {
-        if($privatePayload===null)return;
-        $hook=rtrim($privatePayload,'/').'/scripts/digiops-runtime-activate.py';
-        if(!is_file($hook))return;
-        RuntimeActivator::assertAvailable();
+        if($privatePayload===null)return ['required'=>false,'transport'=>'none'];
+        return RuntimeActivator::preflight($privatePayload,$privateTarget);
     }
 
-    private function activateRuntimeIfPresent(string $privateTarget,string $expectedCommit): array
+    private function activateRuntimeIfPresent(string $privateTarget,string $expectedCommit,array $plan=[]): array
     {
         $hook=rtrim($privateTarget,'/').'/scripts/digiops-runtime-activate.py';
-        return RuntimeActivator::run($hook,$expectedCommit,$privateTarget);
+        return RuntimeActivator::run($hook,$expectedCommit,$privateTarget,$plan);
     }
 
     private function extractSafe(string $zipFile, string $target): void
