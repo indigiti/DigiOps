@@ -5,7 +5,7 @@ declare(strict_types=1);
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, private');
 header('X-Content-Type-Options: nosniff');
-const AGENT_VERSION='1.6.0';
+const AGENT_VERSION='1.6.1';
 const MAX_SKEW=300;
 const MAX_CHUNK=786432;
 function fail(string $error,int $status=400): never {
@@ -117,37 +117,63 @@ function deploymentStateIsActive(array $state): bool {
     return is_int($updated) && $updated >= time()-900;
 }
 function listReleases(string $slug): array { $dir=projectRuntime($slug).'/releases';if(!is_dir($dir))return[];$out=[];foreach(array_diff(scandir($dir)?:[],['.','..']) as $name){$path=$dir.'/'.$name;if(!is_dir($path))continue;$meta=readJsonFile($path.'/meta.json',['id'=>$name]);$meta['size']=dirSize($path.'/public')+(is_dir($path.'/private')?dirSize($path.'/private'):0);$out[]=$meta;}usort($out,fn($a,$b)=>strcmp((string)($b['createdAt']??''),(string)($a['createdAt']??'')));return$out; }
+function commandPath(string $name): ?string {
+    if(!preg_match('/^[A-Za-z0-9._-]+$/',$name))return null;
+    $path=(string)(getenv('PATH')?:'/usr/local/bin:/usr/bin:/bin');
+    foreach(array_filter(explode(PATH_SEPARATOR,$path),'strlen') as $dir){$candidate=rtrim($dir,'/').'/'.$name;if(is_file($candidate)&&is_executable($candidate))return$candidate;}
+    foreach(['/usr/local/bin','/usr/bin','/bin'] as $dir){$candidate=$dir.'/'.$name;if(is_file($candidate)&&is_executable($candidate))return$candidate;}
+    return null;
+}
+function runtimeActivationCapability(): array {
+    $python=commandPath('python3');$timeout=commandPath('timeout');
+    $proc=function_exists('proc_open')&&function_exists('proc_get_status')&&function_exists('proc_terminate')&&function_exists('proc_close');
+    $exec=function_exists('exec');
+    $executor=$proc?'proc_open':(($exec&&$timeout!==null)?'exec':'');
+    $reason='';
+    if($python===null)$reason='RUNTIME_ACTIVATION_PYTHON3_UNAVAILABLE';
+    elseif($executor==='')$reason=(!$proc&&$exec&&$timeout===null)?'RUNTIME_ACTIVATION_TIMEOUT_TOOL_UNAVAILABLE':'RUNTIME_ACTIVATION_EXECUTOR_UNAVAILABLE';
+    return['available'=>$reason==='','executor'=>$reason===''?$executor:'','python'=>$python,'timeout'=>$timeout,'proc_open_available'=>$proc,'exec_available'=>$exec,'reason'=>$reason];
+}
+function assertRuntimeActivationCapability(?string $privatePayload): void {
+    if($privatePayload===null)return;
+    $hook=rtrim($privatePayload,'/').'/scripts/digiops-runtime-activate.py';
+    if(!is_file($hook))return;
+    $cap=runtimeActivationCapability();if(empty($cap['available']))throw new RuntimeException((string)$cap['reason']);
+}
+function certifyActivationOutput(int $exit,string $stdout,string $stderr=''): array {
+    $lines=array_values(array_filter(array_map('trim',preg_split('/\R/',$stdout)?:[]),fn($v)=>$v!==''));
+    $result=[];if($lines){$decoded=json_decode((string)end($lines),true);if(is_array($decoded))$result=$decoded;}
+    if($exit!==0||empty($result['ok'])){$detail=trim($stderr!==''?$stderr:$stdout);if($detail==='')$detail='activation hook returned no certification';throw new RuntimeException('RUNTIME_ACTIVATION_FAILED:'.substr($detail,0,1800));}
+    return$result;
+}
 function activateRuntimeIfPresent(string $privateTarget,string $expectedCommit): array {
     $hook=rtrim($privateTarget,'/').'/scripts/digiops-runtime-activate.py';
     if(!is_file($hook))return['required'=>false,'status'=>'NOT_REQUIRED'];
-    $spec=[0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']];
-    $proc=@proc_open(['python3',$hook,'--expected-commit',$expectedCommit],$spec,$pipes,$privateTarget);
-    if(!is_resource($proc))throw new RuntimeException('RUNTIME_ACTIVATION_START_FAILED');
-    fclose($pipes[0]);stream_set_blocking($pipes[1],false);stream_set_blocking($pipes[2],false);
-    $stdout='';$stderr='';$deadline=microtime(true)+150;$exit=null;
-    try{
-        while(true){
-            $stdout.=(string)stream_get_contents($pipes[1]);$stderr.=(string)stream_get_contents($pipes[2]);
-            $status=proc_get_status($proc);
-            if(!($status['running']??false)){$exit=(int)($status['exitcode']??-1);break;}
-            if(microtime(true)>=$deadline){
-                @proc_terminate($proc,15);usleep(250000);$status=proc_get_status($proc);
-                if($status['running']??false)@proc_terminate($proc,9);
-                throw new RuntimeException('RUNTIME_ACTIVATION_TIMEOUT');
+    $expectedCommit=strtolower(trim($expectedCommit));if(!preg_match('/^[a-f0-9]{40}$/',$expectedCommit))throw new RuntimeException('RUNTIME_ACTIVATION_EXPECTED_COMMIT_INVALID');
+    $cap=runtimeActivationCapability();if(empty($cap['available']))throw new RuntimeException((string)$cap['reason']);
+    $executor=(string)$cap['executor'];$python=(string)$cap['python'];
+    if($executor==='proc_open'){
+        $spec=[0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']];
+        $proc=@proc_open([$python,$hook,'--expected-commit',$expectedCommit],$spec,$pipes,$privateTarget);
+        if(!is_resource($proc))throw new RuntimeException('RUNTIME_ACTIVATION_START_FAILED');
+        fclose($pipes[0]);stream_set_blocking($pipes[1],false);stream_set_blocking($pipes[2],false);
+        $stdout='';$stderr='';$deadline=microtime(true)+150;$exit=null;
+        try{
+            while(true){
+                $stdout.=(string)stream_get_contents($pipes[1]);$stderr.=(string)stream_get_contents($pipes[2]);$status=proc_get_status($proc);
+                if(!($status['running']??false)){$exit=(int)($status['exitcode']??-1);break;}
+                if(microtime(true)>=$deadline){@proc_terminate($proc,15);usleep(250000);$status=proc_get_status($proc);if($status['running']??false)@proc_terminate($proc,9);throw new RuntimeException('RUNTIME_ACTIVATION_TIMEOUT');}
+                usleep(100000);
             }
-            usleep(100000);
-        }
-        $stdout.=(string)stream_get_contents($pipes[1]);$stderr.=(string)stream_get_contents($pipes[2]);
-    } finally {
-        fclose($pipes[1]);fclose($pipes[2]);$closed=proc_close($proc);if($exit===null&&is_int($closed))$exit=$closed;
+            $stdout.=(string)stream_get_contents($pipes[1]);$stderr.=(string)stream_get_contents($pipes[2]);
+        }finally{fclose($pipes[1]);fclose($pipes[2]);$closed=proc_close($proc);if($exit===null&&is_int($closed))$exit=$closed;}
+        $result=certifyActivationOutput((int)($exit??-1),$stdout,$stderr);
+    }else{
+        $cmd='cd '.escapeshellarg($privateTarget).' && '.escapeshellarg((string)$cap['timeout']).' --signal=TERM --kill-after=2s 150s '.escapeshellarg($python).' '.escapeshellarg($hook).' --expected-commit '.escapeshellarg($expectedCommit).' 2>&1';
+        $lines=[];$exit=-1;@exec($cmd,$lines,$exit);if($exit===124||$exit===137)throw new RuntimeException('RUNTIME_ACTIVATION_TIMEOUT');
+        $result=certifyActivationOutput($exit,implode(PHP_EOL,$lines));
     }
-    $lines=array_values(array_filter(array_map('trim',preg_split('/\R/',$stdout)?:[]),fn($v)=>$v!==''));
-    $result=[];if($lines){$decoded=json_decode((string)end($lines),true);if(is_array($decoded))$result=$decoded;}
-    if($exit!==0||empty($result['ok'])){
-        $detail=trim($stderr!==''?$stderr:$stdout);if($detail==='')$detail='activation hook returned no certification';
-        throw new RuntimeException('RUNTIME_ACTIVATION_FAILED:'.substr($detail,0,1800));
-    }
-    return['required'=>true,'status'=>'SUCCESS']+$result;
+    return['required'=>true,'status'=>'SUCCESS','executor'=>$executor]+$result;
 }
 function publishRelease(array $payload,string $zipFile): array {
     [$slug,$publicTarget,$privateTarget]=projectPaths($payload);$runtime=projectRuntime($slug);ensureDir($runtime,0700);$lock=fopen($runtime.'/deploy.lock','c+');if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))fail('DEPLOYMENT_LOCKED',409);
@@ -156,6 +182,7 @@ function publishRelease(array $payload,string $zipFile): array {
         setDeploymentState($slug,'running','validating',38,$stateMeta);
         $releaseId=date('Ymd-His').'-'.substr((string)($payload['commit']??bin2hex(random_bytes(4))),0,8);$stage=$runtime.'/staging/'.$releaseId;$releaseDir=$runtime.'/releases/'.$releaseId;ensureDir($stage);ensureDir(dirname($releaseDir));extractSafe($zipFile,$stage);[$publicPayload,$privatePayload]=payloads($stage);validatePrivatePayload($slug,$privatePayload);
         if(!is_file($publicPayload.'/index.html')&&!is_file($publicPayload.'/index.php'))fail('ENTRYPOINT_MISSING');if(dirSize($publicPayload)>1024*1024*1024)fail('PAYLOAD_TOO_LARGE');
+        assertRuntimeActivationCapability($privatePayload);
         setDeploymentState($slug,'running','snapshotting',52,$stateMeta+['release'=>$releaseId]);
         if(is_dir($publicTarget)&&count(array_diff(scandir($publicTarget)?:[],['.','..']))){$backup='pre-'.$releaseId;copyDir($publicTarget,$runtime.'/releases/'.$backup.'/public');writeJsonFile($runtime.'/releases/'.$backup.'/meta.json',['id'=>$backup,'type'=>'snapshot','createdAt'=>date(DATE_ATOM),'source'=>'pre-deploy']);}
         setDeploymentState($slug,'running','staging-release',68,$stateMeta+['release'=>$releaseId]);
@@ -187,7 +214,7 @@ function publishRelease(array $payload,string $zipFile): array {
 }
 $raw=(string)file_get_contents('php://input');verifySignature($raw);$data=json_decode($raw,true);if(!is_array($data))fail('INVALID_JSON');$action=(string)($data['action']??'');$payload=is_array($data['payload']??null)?$data['payload']:[];
 try{
-    if($action==='ping')ok(['agentVersion'=>AGENT_VERSION,'capabilities'=>['health','releases','deployment-status','deployment-request-id','atomic-switch-v1','runtime-activation-v1','files','deploy-chunked','rollback'],'runtime'=>['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip')],'server'=>php_uname('n')]);
+    if($action==='ping')ok(['agentVersion'=>AGENT_VERSION,'capabilities'=>['health','releases','deployment-status','deployment-request-id','atomic-switch-v1','runtime-activation-v1','runtime-activation-v2','files','deploy-chunked','rollback'],'runtime'=>['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip'),'runtimeActivation'=>runtimeActivationCapability()],'server'=>php_uname('n')]);
     if($action==='health'){[$slug,$public,$private]=projectPaths($payload);$url=trim((string)($payload['url']??''));$healthPath=(string)($payload['healthPath']??'/');$http=['ok'=>false,'status'=>null,'ms'=>null];if($url!==''&&function_exists('curl_init')){$parts=parse_url($url);if(!filter_var($url,FILTER_VALIDATE_URL)||!is_array($parts)||strtolower((string)($parts['scheme']??''))!=='https'||empty($parts['host'])||isset($parts['user'])||isset($parts['pass']))fail('INVALID_HEALTH_URL');$probe=rtrim($url,'/').'/'.ltrim($healthPath,'/');$start=microtime(true);$ch=curl_init($probe);curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_NOBODY=>true,CURLOPT_FOLLOWLOCATION=>false,CURLOPT_MAXREDIRS=>0,CURLOPT_PROTOCOLS=>CURLPROTO_HTTPS,CURLOPT_REDIR_PROTOCOLS=>CURLPROTO_HTTPS,CURLOPT_TIMEOUT=>8,CURLOPT_CONNECTTIMEOUT=>4]);curl_exec($ch);$status=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);curl_close($ch);$http=['ok'=>$status>=200&&$status<400,'status'=>$status,'ms'=>(int)((microtime(true)-$start)*1000)];}$storage=['exists'=>is_dir($public),'bytes'=>dirSize($public),'writable'=>is_dir(dirname($public))&&is_writable(dirname($public))];$runtime=['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip'),'sodium'=>extension_loaded('sodium')];ok(['url'=>$probe,'http'=>$http,'storage'=>$storage,'runtime'=>$runtime,'checkedAt'=>date(DATE_ATOM)]);}
     if($action==='releases'){$slug=safeSlug((string)($payload['project']??''));ok(['releases'=>listReleases($slug)]);}
     if($action==='deployment-status'){$slug=safeSlug((string)($payload['project']??''));$current=readJsonFile(projectRuntime($slug).'/current.json',[]);$deployment=deploymentState($slug);ok(['current'=>$current,'deployment'=>$deployment]);}
