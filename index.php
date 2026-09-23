@@ -14,9 +14,9 @@ declare(strict_types=1);
 session_name('DIGIOPSBOOTSTRAP');
 session_start();
 
-const DIGIOPS_VERIFIED_ARTIFACT_ID = 10746253444;
-const DIGIOPS_VERIFIED_SOURCE_SHA = '1336fc4efb3858460f28b7c792efa6ed9a8b8662';
-const DIGIOPS_VERIFIED_ARTIFACT_DIGEST = 'sha256:48ada0ce41cd3bb835b74ea48792a23d7c4c6829cec19b6604cb1365ea3b392e';
+const DIGIOPS_VERIFIED_ARTIFACT_ID = 10747970155;
+const DIGIOPS_VERIFIED_SOURCE_SHA = '8446b1e0b56e1257e698b29ac9eb099e00315772';
+const DIGIOPS_VERIFIED_ARTIFACT_DIGEST = 'sha256:24b9bd22dc5d0d0a461e3abffed3700f724697763773beaeeede24c7b59ef96b';
 
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
