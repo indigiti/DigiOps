@@ -39,4 +39,24 @@ foreach($terminal as $message){
     if($method->invoke(null,$message)!==false) throw new RuntimeException('PRECOMMIT_FAILURE_MARKED_UNCERTAIN_'.$message);
 }
 
+
+$activationMethod=new ReflectionMethod(RemoteDeploymentDriver::class,'artifactRequiresRuntimeActivation');
+$activationMethod->setAccessible(true);
+
+$zipWithHook=$root.'/with-hook.zip';
+$zip=new ZipArchive();
+if($zip->open($zipWithHook,ZipArchive::CREATE)!==true) throw new RuntimeException('TEST_ZIP_CREATE_FAILED');
+$zip->addFromString('RELEASE.json',json_encode([
+    'runtimeActivation'=>['activationHook'=>'scripts/digiops-runtime-activate.py'],
+],JSON_UNESCAPED_SLASHES));
+$zip->close();
+if($activationMethod->invoke(null,$zipWithHook)!==true) throw new RuntimeException('RUNTIME_ACTIVATION_MANIFEST_NOT_DETECTED');
+
+$zipWithoutHook=$root.'/without-hook.zip';
+$zip=new ZipArchive();
+if($zip->open($zipWithoutHook,ZipArchive::CREATE)!==true) throw new RuntimeException('TEST_ZIP_CREATE_FAILED');
+$zip->addFromString('RELEASE.json',json_encode(['application'=>'STATIC'],JSON_UNESCAPED_SLASHES));
+$zip->close();
+if($activationMethod->invoke(null,$zipWithoutHook)!==false) throw new RuntimeException('STATIC_RELEASE_FALSE_POSITIVE');
+
 echo "RemoteDeploymentDriverTest PASS\n";
