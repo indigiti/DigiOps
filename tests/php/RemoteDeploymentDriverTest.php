@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 $root=sys_get_temp_dir().'/digiops-remote-driver-test-'.bin2hex(random_bytes(4));
 define('DIGIOPS_PRIVATE_ROOT',$root.'/private');
+if(!is_dir($root) && !mkdir($root,0700,true) && !is_dir($root)) throw new RuntimeException('TEST_ROOT_CREATE_FAILED');
 define('DIGIOPS_APP_HOME',$root);
 define('DIGIOPS_SOURCE_ROOT',dirname(__DIR__,2));
 
