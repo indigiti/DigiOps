@@ -84,5 +84,18 @@ if(file_get_contents($immutableTarget)!=='same-binary-bytes'){
     throw new RuntimeException('OVERLAY_IMMUTABLE_COLLISION_MODIFIED_TARGET');
 }
 
+
+$rollbackSource=$root.'/rollback-source';
+$rollbackTarget=$root.'/rollback-target';
+Files::ensureDir($rollbackSource);
+Files::ensureDir($rollbackTarget);
+file_put_contents($rollbackSource.'/engine','new-engine');
+file_put_contents($rollbackTarget.'/engine','old-engine');
+$rollbackPlan=Files::beginOverlay($rollbackSource,$rollbackTarget,$root.'/backup-rollback-busy');
+Files::applyOverlay($rollbackPlan);
+if(file_get_contents($rollbackTarget.'/engine')!=='new-engine') throw new RuntimeException('OVERLAY_ROLLBACK_SETUP_FAILED');
+Files::rollbackOverlay($rollbackPlan);
+if(file_get_contents($rollbackTarget.'/engine')!=='old-engine') throw new RuntimeException('OVERLAY_ATOMIC_RESTORE_FAILED');
+
 Files::removeTree($root);
 echo "FilesOverlayTest PASS\n";

@@ -231,7 +231,23 @@ final class Files
             $dest=$target . DIRECTORY_SEPARATOR . str_replace('/',DIRECTORY_SEPARATOR,(string)$relative);
             if (!is_file($backup)) throw new RuntimeException('OVERLAY_RESTORE_BACKUP_MISSING:'.$relative);
             self::ensureDir(dirname($dest));
-            if (!@copy($backup,$dest)) throw new RuntimeException('OVERLAY_RESTORE_FAILED:'.$relative);
+
+            // Never write directly into the inode currently addressed by the
+            // live path. Executables can reject that with ETXTBSY ("Text file
+            // busy"). Stage the backup beside the destination and atomically
+            // replace the directory entry instead.
+            $restoreTmp=$dest.'.restore.'.bin2hex(random_bytes(6));
+            if (!@copy($backup,$restoreTmp)) {
+                @unlink($restoreTmp);
+                throw new RuntimeException('OVERLAY_RESTORE_STAGE_FAILED:'.$relative);
+            }
+            $mode=@fileperms($dest);
+            if(!is_int($mode)) $mode=@fileperms($backup);
+            if(is_int($mode)) @chmod($restoreTmp,$mode & 0777);
+            if (!@rename($restoreTmp,$dest)) {
+                @unlink($restoreTmp);
+                throw new RuntimeException('OVERLAY_RESTORE_FAILED:'.$relative);
+            }
         }
 
         foreach (array_reverse((array)($plan['newDirs']??[])) as $relative) {
