@@ -93,6 +93,7 @@ final class ReleaseManager
             [$publicPayload, $privatePayload] = $this->detectPayloads($stage);
             $this->validatePayload($publicPayload);
             $this->validatePrivatePayload($slug,$privatePayload);
+            $this->assertRuntimeActivationCapability($privatePayload);
 
             $this->writeDeploymentState($slug,'running','snapshotting',52,$stateMeta+['release'=>$releaseId]);
             if (is_dir($publicTarget) && $this->hasEntries($publicTarget)) {
@@ -302,60 +303,18 @@ final class ReleaseManager
         return $out;
     }
 
+    private function assertRuntimeActivationCapability(?string $privatePayload): void
+    {
+        if($privatePayload===null)return;
+        $hook=rtrim($privatePayload,'/').'/scripts/digiops-runtime-activate.py';
+        if(!is_file($hook))return;
+        RuntimeActivator::assertAvailable();
+    }
+
     private function activateRuntimeIfPresent(string $privateTarget,string $expectedCommit): array
     {
         $hook=rtrim($privateTarget,'/').'/scripts/digiops-runtime-activate.py';
-        if(!is_file($hook)) return ['required'=>false,'status'=>'NOT_REQUIRED'];
-
-        $descriptors=[
-            0=>['pipe','r'],
-            1=>['pipe','w'],
-            2=>['pipe','w'],
-        ];
-        $proc=@proc_open(['python3',$hook,'--expected-commit',$expectedCommit],$descriptors,$pipes,$privateTarget);
-        if(!is_resource($proc)) throw new RuntimeException('RUNTIME_ACTIVATION_START_FAILED');
-        fclose($pipes[0]);
-        stream_set_blocking($pipes[1],false);
-        stream_set_blocking($pipes[2],false);
-        $stdout='';$stderr='';$deadline=microtime(true)+150;$exitCode=null;
-        try{
-            while(true){
-                $stdout.=(string)stream_get_contents($pipes[1]);
-                $stderr.=(string)stream_get_contents($pipes[2]);
-                $status=proc_get_status($proc);
-                if(!($status['running']??false)){
-                    $exitCode=(int)($status['exitcode']??-1);
-                    break;
-                }
-                if(microtime(true)>=$deadline){
-                    @proc_terminate($proc,15);
-                    usleep(250000);
-                    $status=proc_get_status($proc);
-                    if($status['running']??false)@proc_terminate($proc,9);
-                    throw new RuntimeException('RUNTIME_ACTIVATION_TIMEOUT');
-                }
-                usleep(100000);
-            }
-            $stdout.=(string)stream_get_contents($pipes[1]);
-            $stderr.=(string)stream_get_contents($pipes[2]);
-        } finally {
-            fclose($pipes[1]);fclose($pipes[2]);
-            $closed=proc_close($proc);
-            if($exitCode===null && is_int($closed))$exitCode=$closed;
-        }
-
-        $lines=array_values(array_filter(array_map('trim',preg_split('/\R/',$stdout)?:[]),fn($v)=>$v!==''));
-        $payload=[];
-        if($lines){
-            $decoded=json_decode((string)end($lines),true);
-            if(is_array($decoded))$payload=$decoded;
-        }
-        if($exitCode!==0 || empty($payload['ok'])){
-            $detail=trim($stderr!==''?$stderr:$stdout);
-            if($detail==='')$detail='activation hook returned no certification';
-            throw new RuntimeException('RUNTIME_ACTIVATION_FAILED:'.substr($detail,0,1800));
-        }
-        return ['required'=>true,'status'=>'SUCCESS']+$payload;
+        return RuntimeActivator::run($hook,$expectedCommit,$privateTarget);
     }
 
     private function extractSafe(string $zipFile, string $target): void
