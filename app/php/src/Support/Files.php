@@ -88,7 +88,7 @@ final class Files
         }
     }
 
-    public static function copyDir(string $source, string $target, array $skipFiles = []): void
+    public static function copyDir(string $source, string $target, array $skipFiles = [], bool $atomicReplace = false): void
     {
         if (!is_dir($source)) throw new RuntimeException('SOURCE_DIRECTORY_MISSING');
         self::ensureDir($target);
@@ -116,6 +116,33 @@ final class Files
             if (!is_readable($item->getPathname())) throw new RuntimeException('COPY_SOURCE_NOT_READABLE:'.$relative);
             if (is_file($dest) && !is_writable($dest)) throw new RuntimeException('COPY_TARGET_FILE_NOT_WRITABLE:'.$relative);
             if (!is_file($dest) && !is_writable(dirname($dest))) throw new RuntimeException('COPY_TARGET_DIRECTORY_NOT_WRITABLE:'.$relative);
+            // Overlay live executable files via a same-directory temporary
+            // inode, not copy() into the currently executing inode (ETXTBSY).
+            // Rename atomically publishes the new bytes while the existing
+            // process continues using its previous executable until restart.
+            if ($atomicReplace && is_file($dest)) {
+                $tmp=$dest.'.publish-'.bin2hex(random_bytes(8));
+                try {
+                    if (!@copy($item->getPathname(),$tmp)) {
+                        throw new RuntimeException('COPY_STAGE_FAILED:'.$relative);
+                    }
+                    $mode=@fileperms($dest);
+                    if (!is_int($mode) || !@chmod($tmp,$mode & 0777)) {
+                        throw new RuntimeException('COPY_STAGE_MODE_FAILED:'.$relative);
+                    }
+                    $srcHash=@hash_file('sha256',$item->getPathname());
+                    $tmpHash=@hash_file('sha256',$tmp);
+                    if (!is_string($srcHash) || !is_string($tmpHash) || !hash_equals($srcHash,$tmpHash)) {
+                        throw new RuntimeException('COPY_STAGE_VERIFY_FAILED:'.$relative);
+                    }
+                    if (!@rename($tmp,$dest)) {
+                        throw new RuntimeException('COPY_PUBLISH_FAILED:'.$relative);
+                    }
+                } finally {
+                    if (is_file($tmp)) @unlink($tmp);
+                }
+                continue;
+            }
             if (!@copy($item->getPathname(), $dest)) {
                 $last=error_get_last();
                 $reason=is_array($last)?preg_replace('/\\s+/',' ',(string)($last['message']??'')):'';
@@ -206,7 +233,7 @@ final class Files
     public static function applyOverlay(array $plan): void
     {
         try {
-            self::copyDir((string)$plan['source'],(string)$plan['target'],(array)($plan['unchangedFiles']??[]));
+            self::copyDir((string)$plan['source'],(string)$plan['target'],(array)($plan['unchangedFiles']??[]),true);
         } catch (\Throwable $e) {
             try { self::rollbackOverlay($plan); }
             catch (\Throwable $restore) {
