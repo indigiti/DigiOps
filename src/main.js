@@ -833,6 +833,7 @@ function app(){
     async deploy(){
       if(!this.selected)return
       if(!this.githubInfo) await this.loadGithubInfo()
+      if(!this.selected)return // project may change while GitHub lookup is pending
       if(!this.githubConnected){
         this.error='GitHub connection required. Open Connections and save a GitHub token before deployment.'
         return
@@ -841,15 +842,21 @@ function app(){
         this.error='No verified deployment candidate is ready. Run Check update first.'
         return
       }
+      // The user can navigate away while an async deployment finishes.
+      // Snapshot the project before network requests; never read selected.id
+      // again after publish (selected is null on global dashboard pages).
+      const projectId=this.selected.id
+      const projectName=this.selectedName
+      const projectUrl=this.selected.url
       const requestedCommit=this.candidateCommitSha==='—'?'':this.candidateCommitSha
       const requestedRun=this.candidateRunNumber
       const requestedArtifact=this.candidateArtifactId
       const requestId=deploymentRequestId()
-      const summary='Deploy '+requestedRun+' · artifact '+requestedArtifact+' · '+this.candidateCommitShort+' to '+this.selected.url+'?'
+      const summary='Deploy '+requestedRun+' · artifact '+requestedArtifact+' · '+this.candidateCommitShort+' to '+projectUrl+'?'
       if(!confirm(summary))return
       this.clearMessages();this.busy=true
-      this.queueDeploymentWatch({projectId:this.selected.id,projectName:this.selectedName,commit:requestedCommit,requestId,run:requestedRun,artifact:requestedArtifact,status:'queued',phase:'starting',progress:6})
-      this.startOperation('deploy','Deploying '+this.selectedName,'Preparing verified deployment candidate…',6,true)
+      this.queueDeploymentWatch({projectId:projectId,projectName:projectName,commit:requestedCommit,requestId,run:requestedRun,artifact:requestedArtifact,status:'queued',phase:'starting',progress:6})
+      this.startOperation('deploy','Deploying '+projectName,'Preparing verified deployment candidate…',6,true)
       this.runEstimatedStages([
         {percent:14,message:'Locking deployment target…'},
         {percent:24,message:'Downloading the selected GitHub artifact…'},
@@ -863,7 +870,7 @@ function app(){
       const deployResponseTimer=setTimeout(()=>deployController.abort(),15000)
       try{
         const d=await api('./api/deploy.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},signal:deployController.signal,body:JSON.stringify({
-          project:this.selected.id,
+          project:projectId,
           runId:this.candidateRun ? this.candidateRun.id : 0,
           artifactId:this.candidateArtifact ? this.candidateArtifact.id : 0,
           commit:requestedCommit,
@@ -871,12 +878,14 @@ function app(){
         })})
         clearTimeout(deployResponseTimer)
         this.setOperation(94,'Deployment published. Refreshing application registry…')
-        this.cacheDropProject(this.selected.id)
+        this.cacheDropProject(projectId)
         await this.loadProjects()
         this.setOperation(97,'Refreshing release history…')
         await this.loadReleases(true)
         this.setOperation(99,'Running post-deploy health check…')
-        const healthOk=await this.checkHealth(true,requestId)
+        const healthOk=this.selected&&this.selected.id===projectId
+          ? await this.checkHealth(true,requestId)
+          : await this.checkHealthForProject(projectId,requestId)
         this.clearDeploymentWatch(requestId)
         if(healthOk){
           this.notice='Deployment completed successfully · release '+d.release+' · health verified.'
@@ -906,8 +915,8 @@ function app(){
         if(ambiguous && requestedCommit){
           this.stopOperationTimer()
           this.queueDeploymentWatch({
-            projectId:this.selected.id,
-            projectName:this.selectedName,
+            projectId:projectId,
+            projectName:projectName,
             commit:requestedCommit,
             requestId,
             run:requestedRun,
@@ -956,24 +965,41 @@ function app(){
         this.error=e.message;this.failOperation('Rollback failed: '+e.message)
       }finally{this.busy=false;icons()}
     },
+    // Cross-page verification for an already-published deployment. Navigation
+    // does not change the project being checked; avoid null selected.id races.
+    async checkHealthForProject(projectId,requestId=''){
+      try{
+        const healthPayload={project:projectId}
+        if(requestId)healthPayload.requestId=requestId
+        const result=await this.singleFlight('health:'+projectId+'|'+requestId,()=>api('./api/health.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify(healthPayload)}))
+        this.cachePut('health',projectId,result)
+        if(this.selected&&this.selected.id===projectId)this.health=result
+        await this.loadProjects()
+        return !!result.ok
+      }catch(e){
+        return false
+      }
+    },
     async checkHealth(silent=false,requestId=''){
       if(!this.selected)return false
+      const projectId=this.selected.id
       if(!silent){
         this.clearMessages();this.busy=true
         this.startOperation('health','Running health check','Checking HTTP, storage and runtime status…',20,false)
       }
       try{
-        const healthPayload={project:this.selected.id}
+        const healthPayload={project:projectId}
         if(requestId)healthPayload.requestId=requestId
-        this.health=await this.singleFlight('health:'+this.selected.id+'|'+requestId,()=>api('./api/health.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify(healthPayload)}))
-        this.cachePut('health',this.selected.id,this.health)
+        const health=await this.singleFlight('health:'+projectId+'|'+requestId,()=>api('./api/health.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify(healthPayload)}))
+        this.cachePut('health',projectId,health)
+        if(this.selected&&this.selected.id===projectId)this.health=health
         if(!silent)this.setOperation(78,'Refreshing application health state…')
         await this.loadProjects()
         if(!silent){
-          this.notice=this.health.ok?'Health check passed.':'Health check needs attention.'
-          this.completeOperation(this.health.ok?'Health check passed.':'Health check completed with attention required.')
+          this.notice=health.ok?'Health check passed.':'Health check needs attention.'
+          this.completeOperation(health.ok?'Health check passed.':'Health check completed with attention required.')
         }
-        return !!this.health.ok
+        return !!health.ok
       }catch(e){
         if(!silent){this.error=e.message;this.failOperation('Health check failed: '+e.message)}
         return false
