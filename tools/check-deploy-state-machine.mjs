@@ -15,7 +15,30 @@ const healthOrigin=read('app/php/src/Health/HealthOrigin.php');
 const infrastructure=read('public/api/infrastructure.php');
 const githubClient=read('app/php/src/GitHub/GitHubClient.php');
 
+// The selected application can be null after navigating to another page
+// while a previously started deployment completes. Never dereference
+// selected.id after asynchronous publish; authoritative verification uses
+// the project id captured when the deployment began.
+const deploySource=ui.slice(ui.indexOf('    async deploy(){'),ui.indexOf('    async rollback('));
+const healthSource=ui.slice(ui.indexOf("    async checkHealth(silent=false"),ui.indexOf('    async browse('));
+
 const checks=[
+  ['Deployment pins project and candidate IDs before the API call',
+    deploySource.includes('const projectId=this.selected.id') &&
+    deploySource.includes('const candidateRunId=this.candidateRun?.id||0') &&
+    deploySource.includes('const candidateArtifactId=this.candidateArtifact?.id||0') &&
+    deploySource.includes('project:projectId') &&
+    deploySource.includes('runId:candidateRunId') &&
+    deploySource.includes('artifactId:candidateArtifactId')],
+  ['Deployment cache and watch use stable project when UI selection disappears',
+    deploySource.includes('this.cacheDropProject(projectId)') &&
+    deploySource.includes('this.checkHealthForProject(projectId,requestId)') &&
+    deploySource.includes('projectId:projectId') &&
+    !deploySource.includes('this.cacheDropProject(this.selected.id)')],
+  ['Health verifier pins project identity across async requests',
+    healthSource.includes('const projectId=this.selected.id') &&
+    healthSource.includes('this.cachePut(\'health\',projectId,health)') &&
+    !healthSource.includes('this.cachePut(\'health\',this.selected.id')],
   ['UI hands aborted deploys to background verification', ui.includes("aborted?'DEPLOY_RESPONSE_TIMEOUT'") && ui.includes('queueDeploymentWatch')],
   ['UI reloads deployment watches from server journal', ui.includes("api('./api/deployment-jobs.php')") && ui.includes('syncDeploymentWatches') && !ui.includes('DEPLOYMENT_WATCH_KEY')],
   ['UI follows authoritative watcher state', ui.includes("watch.status==='deployed'") && ui.includes("watch.status==='failed'") && ui.includes("watch.status=status&&status.state")],

@@ -11,6 +11,18 @@ permissions:
   contents: read
 
 jobs:
+  deployment-ui-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify async deployment selection safety
+        run: |
+          node --check src/main.js
+          node tools/check-deploy-state-machine.mjs
+
   frontend:
     runs-on: ubuntu-latest
     steps:
