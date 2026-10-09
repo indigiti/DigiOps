@@ -88,6 +88,23 @@ candidate-validation
 
 DigiOps treats phase names as authoritative. UI percentages are only internal animation aids and are not deployment completion guarantees.
 
+## Executable-safe private publication
+
+Private release overlays stage each replacement file in its destination
+directory and atomically rename it over the previous path. This avoids
+Linux `ETXTBSY` (Text file busy) when a Rust/Go process is executing a
+previous release's ELF inode. Existing filesystem permissions, including
+the executable bit, are retained; failed public switches can restore the
+private overlay atomically.
+
+**Deployment is not process activation.** The process that was already
+running continues executing its original (possibly unlinked) inode until
+the operator safely restarts it. DigiOps does not forcibly terminate
+QSYN, QNEXT, or other application processes during private publication.
+A service restart and health verification remain distinct operations,
+and updates should be coordinated with the application's lifecycle
+manager.
+
 ## Deployment jobs
 
 Each deployment has a durable JSON job record under:

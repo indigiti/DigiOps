@@ -11,6 +11,19 @@ permissions:
   contents: read
 
 jobs:
+  executable-overlay-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+      - name: Test atomic replacement of a running Linux executable
+        run: |
+          php -l app/php/src/Support/Files.php
+          php tests/php/FilesOverlayTest.php
+
   frontend:
     runs-on: ubuntu-latest
     steps:

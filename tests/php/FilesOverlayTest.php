@@ -97,5 +97,74 @@ if(file_get_contents($rollbackTarget.'/engine')!=='new-engine') throw new Runtim
 Files::rollbackOverlay($rollbackPlan);
 if(file_get_contents($rollbackTarget.'/engine')!=='old-engine') throw new RuntimeException('OVERLAY_ATOMIC_RESTORE_FAILED');
 
+// Regression: Linux holds an executing ELF inode busy while DigiOps replaces
+// its path. A same-directory copy + rename must succeed without killing it.
+// The downloaded artifact may have lost +x; retain existing executable mode.
+if (PHP_OS_FAMILY==='Linux' && function_exists('proc_open') && is_executable('/bin/sleep') && is_file('/bin/true')) {
+    $liveRoot=$root.'/live-qsyn';
+    $nextRoot=$root.'/next-qsyn';
+    $liveBinary=$liveRoot.'/app/bin/qsyn-stream';
+    $nextBinary=$nextRoot.'/app/bin/qsyn-stream';
+    Files::ensureDir(dirname($liveBinary));
+    Files::ensureDir(dirname($nextBinary));
+    if (!copy('/bin/sleep',$liveBinary) || !chmod($liveBinary,0755)) {
+        throw new RuntimeException('EXECUTABLE_TEST_SETUP_FAILED');
+    }
+    if (!copy('/bin/true',$nextBinary) || !chmod($nextBinary,0644)) {
+        throw new RuntimeException('NEW_BINARY_TEST_SETUP_FAILED');
+    }
+    $pipes=[];
+    $running=proc_open([$liveBinary,'8'],[
+        0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']
+    ],$pipes);
+    if (!is_resource($running)) throw new RuntimeException('EXECUTABLE_START_FAILED');
+    try {
+        usleep(100000);
+        if (!proc_get_status($running)['running']) throw new RuntimeException('EXECUTABLE_STOPPED_EARLY');
+        $livePlan=Files::beginOverlay($nextRoot,$liveRoot,$root.'/live-backup');
+        Files::applyOverlay($livePlan);
+        if (!hash_equals((string)hash_file('sha256',$nextBinary),(string)hash_file('sha256',$liveBinary))) {
+            throw new RuntimeException('EXECUTABLE_ATOMIC_REPLACE_FAILED');
+        }
+        if (!proc_get_status($running)['running']) {
+            throw new RuntimeException('EXECUTABLE_PROCESS_INTERRUPTED_BY_REPLACE');
+        }
+        if (((int)fileperms($liveBinary)&0100)===0) throw new RuntimeException('EXECUTABLE_BIT_LOST_ON_REPLACE');
+        if (glob(dirname($liveBinary).'/.qsyn-stream.digiops-*')!==[]) {
+            throw new RuntimeException('EXECUTABLE_REPLACE_TMP_LEFT_BEHIND');
+        }
+        Files::rollbackOverlay($livePlan);
+        if (!hash_equals((string)hash_file('sha256','/bin/sleep'),(string)hash_file('sha256',$liveBinary))) {
+            throw new RuntimeException('EXECUTABLE_ROLLBACK_BYTES_INCORRECT');
+        }
+        if (!proc_get_status($running)['running']) {
+            throw new RuntimeException('EXECUTABLE_PROCESS_INTERRUPTED_BY_ROLLBACK');
+        }
+    } finally {
+        proc_terminate($running);
+        foreach($pipes as $pipe) fclose($pipe);
+        proc_close($running);
+    }
+}
+
+// Destination symlinks must not be followed or replaced by the atomic copier.
+$symlinkSource=$root.'/symlink-source';
+$symlinkTarget=$root.'/symlink-target';
+Files::ensureDir($symlinkSource);
+Files::ensureDir($symlinkTarget);
+file_put_contents($symlinkSource.'/entry','trusted');
+file_put_contents($root.'/outside','outside-safe');
+if (symlink($root.'/outside',$symlinkTarget.'/entry')) {
+    try {
+        Files::copyDir($symlinkSource,$symlinkTarget);
+        throw new RuntimeException('COPY_TARGET_SYMLINK_ACCEPTED');
+    } catch(RuntimeException $e) {
+        if(!str_starts_with($e->getMessage(),'COPY_TARGET_SYMLINK_NOT_ALLOWED:entry')) throw $e;
+    }
+    if(file_get_contents($root.'/outside')!=='outside-safe') {
+        throw new RuntimeException('COPY_TARGET_SYMLINK_CHANGED_OUTSIDE');
+    }
+}
+
 Files::removeTree($root);
 echo "FilesOverlayTest PASS\n";
