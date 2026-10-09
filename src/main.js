@@ -80,6 +80,7 @@ function app(){
     redisForm:{host:'127.0.0.1',port:6379,username:'',password:'',database:0,prefix:'digiops:',timeout:1.5},
     varnishForm:{enabled:true,bypassPath:'/digiops/',sessionCookie:'DIGIOPSSESSID',apiPath:'/digiops/api/'},
     targetForm:{id:'',name:'',type:'agent',endpoint:'',secret:'',publicBase:'public_html',privateBase:'private_html'},
+    sourceEdit:{repo:'',branch:'',originalRepo:'',originalBranch:''},
     form:{name:'',repo:'',branch:'main',slug:'',artifactName:'digiops-release',healthPath:'/',retention:5,targetId:'local',url:'',publicPath:'',privatePath:''},
 
     async init(){
@@ -742,6 +743,32 @@ function app(){
       this.modal='create'
       queueMicrotask(()=>this.updatePathPreview())
       icons()
+    },
+    beginSourceEdit(){
+      if(!this.selected)return
+      this.sourceEdit={repo:this.selected.repo,branch:this.selected.branch,originalRepo:this.selected.repo,originalBranch:this.selected.branch}
+      this.modal='editSource'
+      icons()
+    },
+    async saveSourceEdit(){
+      if(!this.selected)return
+      this.clearMessages()
+      const id=this.selected.id
+      const repo=this.sourceEdit.repo.trim()
+      const branch=this.sourceEdit.branch.trim()
+      if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)){this.error='INVALID_REPOSITORY';return}
+      if(!/^[A-Za-z0-9._\/-]{1,160}$/.test(branch)){this.error='INVALID_BRANCH';return}
+      if(repo===this.sourceEdit.originalRepo && branch===this.sourceEdit.originalBranch){this.modal=null;return}
+      this.busy=true
+      try{
+        await api('./api/projects.php',{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({id,repo,branch,expectedRepo:this.sourceEdit.originalRepo,expectedBranch:this.sourceEdit.originalBranch})})
+        this.cacheDropProject(id)
+        this.githubInfo=null
+        this.modal=null
+        await this.loadProjects()
+        this.notice='Repository source updated. Run Check update to verify the new source before deploying.'
+      }catch(e){this.error=e.message}
+      finally{this.busy=false;icons()}
     },
     async saveProject(){
       this.clearMessages()
@@ -1435,7 +1462,7 @@ document.querySelector('#app').innerHTML=`
               <div class="stat-card"><i data-lucide="server" class="h-5 w-5 text-violet-600"></i><h3 class="mt-3 font-bold">Runtime</h3><p class="muted mt-1" x-text="healthRuntimeText"></p></div>
             </div>
           </div>
-          <div x-show="projectTab==='settings'" class="panel"><h2 class="font-bold">Application settings</h2><div class="mt-5 grid gap-4 md:grid-cols-2"><div><span class="muted">Repository</span><b class="mt-1 block" x-text="selectedRepo"></b></div><div><span class="muted">Branch</span><b class="mt-1 block" x-text="selectedBranch"></b></div><div><span class="muted">Artifact</span><b class="mt-1 block" x-text="selectedArtifactName"></b></div><div><span class="muted">Application URL</span><code class="mt-1 block break-all text-sm" x-text="selectedUrl"></code></div><div><span class="muted">Health URL</span><code class="mt-1 block break-all text-sm" x-text="selectedHealthUrl"></code><small class="mt-1 block text-slate-500">Health path: <code x-text="selectedHealthPath||'/'"></code></small></div><div><span class="muted">Deployment target</span><b class="mt-1 block" x-text="targetName(selectedTargetId)"></b></div><div><span class="muted">Public path</span><code class="mt-1 block text-xs" x-text="selectedPublicPath"></code></div><div><span class="muted">Private path</span><code class="mt-1 block text-xs" x-text="selectedPrivatePath"></code></div></div></div>
+          <div x-show="projectTab==='settings'" class="panel"><div class="flex flex-wrap items-center justify-between gap-3"><h2 class="font-bold">Application settings</h2><button class="btn" @click="beginSourceEdit()" :disabled="busy"><i data-lucide="folder-git-2" class="h-4 w-4"></i> Edit repository</button></div><div class="mt-5 grid gap-4 md:grid-cols-2"><div><span class="muted">Repository</span><b class="mt-1 block" x-text="selectedRepo"></b></div><div><span class="muted">Branch</span><b class="mt-1 block" x-text="selectedBranch"></b></div><div><span class="muted">Artifact</span><b class="mt-1 block" x-text="selectedArtifactName"></b></div><div><span class="muted">Application URL</span><code class="mt-1 block break-all text-sm" x-text="selectedUrl"></code></div><div><span class="muted">Health URL</span><code class="mt-1 block break-all text-sm" x-text="selectedHealthUrl"></code><small class="mt-1 block text-slate-500">Health path: <code x-text="selectedHealthPath||'/'"></code></small></div><div><span class="muted">Deployment target</span><b class="mt-1 block" x-text="targetName(selectedTargetId)"></b></div><div><span class="muted">Public path</span><code class="mt-1 block text-xs" x-text="selectedPublicPath"></code></div><div><span class="muted">Private path</span><code class="mt-1 block text-xs" x-text="selectedPrivatePath"></code></div></div></div>
         </section>
 
         <section data-digiops-page="deployments" x-show="page==='deployments'" class="space-y-6">
@@ -1697,6 +1724,15 @@ document.querySelector('#app').innerHTML=`
 
   <div x-show="modal==='target'" class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" @click.outside="modal=null"><div class="flex items-center justify-between border-b border-slate-200 px-6 py-5"><div><h2 class="text-lg font-bold">Add deployment target</h2><p class="muted">Connect another Cloudways application or server through the signed DigiOps agent.</p></div><button @click="modal=null" class="icon-btn"><i data-lucide="x"></i></button></div><form @submit.prevent="saveTarget()" class="space-y-4 p-6"><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Target name</span><input x-model="targetForm.name" @input="syncTargetId()" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Target ID</span><input x-model="targetForm.id" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label></div><label class="block text-sm"><span class="mb-1.5 block font-semibold">Agent HTTPS endpoint</span><input x-model="targetForm.endpoint" placeholder="https://remote.example.com/digiops-agent.php" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="block text-sm"><span class="mb-1.5 block font-semibold">Shared secret</span><div class="flex gap-2"><input x-model="targetForm.secret" class="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2.5 font-mono text-xs" minlength="32" required><button type="button" @click="generateTargetSecret()" class="btn">Generate</button></div><small class="text-slate-500">Store the same secret as DIGIOPS_AGENT_SECRET on the remote application.</small></label><div class="flex justify-end gap-2"><button type="button" @click="modal=null" class="btn">Cancel</button><button class="btn btn-primary" :disabled="busy">Save target</button></div></form></div></div>
 
+  <div x-show="modal==='editSource'" class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="Edit application source" @click.outside="!busy && (modal=null)">
+    <div class="flex items-center justify-between border-b border-slate-200 px-6 py-5"><div><h2 class="text-lg font-bold">Edit repository</h2><p class="muted">Change the source for this application without changing deployment paths.</p></div><button @click="modal=null" :disabled="busy" class="icon-btn"><i data-lucide="x"></i></button></div>
+    <form @submit.prevent="saveSourceEdit()" class="space-y-4 p-6">
+      <label class="block text-sm"><span class="mb-1.5 block font-semibold">GitHub repository</span><input x-model="sourceEdit.repo" placeholder="owner/repository" autocomplete="off" spellcheck="false" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label>
+      <label class="block text-sm"><span class="mb-1.5 block font-semibold">Branch</span><input x-model="sourceEdit.branch" placeholder="main" autocomplete="off" spellcheck="false" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label>
+      <p class="text-sm text-amber-800">Changing source clears cached update availability. Existing releases and deployment folders are retained. Check the new source before deploying.</p>
+      <div class="flex justify-end gap-2"><button type="button" @click="modal=null" :disabled="busy" class="btn">Cancel</button><button type="submit" :disabled="busy" class="btn btn-primary">Save repository</button></div>
+    </form>
+  </div></div>
   <div x-show="modal==='create'" class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" @click.outside="modal=null"><div class="flex items-center justify-between border-b border-slate-200 px-6 py-5"><div><h2 class="text-lg font-bold">Create application</h2><p class="muted">Map a repository to isolated Cloudways folders.</p></div><button @click="modal=null" class="icon-btn"><i data-lucide="x"></i></button></div><form @submit.prevent="saveProject()" class="space-y-4 p-6"><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Application name</span><input id="digiops-app-name" x-model="form.name" @input="slugify()" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Slug</span><input id="digiops-app-slug" x-model="form.slug" @input="syncSlug($event.target.value)" autocomplete="off" spellcheck="false" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label></div><label class="block text-sm"><span class="mb-1.5 block font-semibold">Repository</span><input x-model="form.repo" placeholder="owner/repository" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="block text-sm"><span class="mb-1.5 block font-semibold">Deployment target</span><select x-model="form.targetId" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"><template x-for="t in targets" :key="t.id"><option :value="t.id" x-text="t.name"></option></template></select></label><div x-show="form.targetId!=='local'" class="rounded-2xl border border-blue-100 bg-blue-50/50 p-4"><div class="grid gap-4"><label class="text-sm"><span class="mb-1.5 block font-semibold">Application URL</span><input x-model="form.url" placeholder="https://app.example.com/" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"></label><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Remote public path</span><input x-model="form.publicPath" placeholder="public_html/ or public_html/app/" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Remote private path</span><input x-model="form.privatePath" placeholder="private_html/ or private_html/app/" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"></label></div></div></div><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Branch</span><input x-model="form.branch" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Artifact name</span><input x-model="form.artifactName" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label></div><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Health path</span><input x-model="form.healthPath" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Keep releases</span><input x-model="form.retention" type="number" min="1" max="20" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label></div><div class="rounded-2xl bg-slate-50 p-4 text-sm"><b>Automatic paths</b><div id="digiops-public-path-preview" class="mt-2 font-mono text-xs text-slate-500">public_html/{slug}/</div><div id="digiops-private-path-preview" class="font-mono text-xs text-slate-500">private_html/{slug}/</div></div><div class="flex justify-end gap-2"><button type="button" @click="modal=null" class="btn">Cancel</button><button class="btn btn-primary" :disabled="busy">Create application</button></div></form></div></div>
 </div>`
 
