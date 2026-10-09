@@ -272,11 +272,11 @@ final class ReleaseManager
 
             try {
                 $this->switcher->switch($tmp, $publicTarget, $slug);
-            } catch (\\Throwable $e) {
+            } catch (\Throwable $e) {
                 if ($overlayPlan !== null) {
                     try {
                         Files::rollbackOverlay($overlayPlan);
-                    } catch (\\Throwable $restore) {
+                    } catch (\Throwable $restore) {
                         throw new RuntimeException(
                             'ROLLBACK_PUBLICATION_FAILED_PRIVATE_RESTORE_FAILED:'
                             . $e->getMessage() . ':' . $restore->getMessage(),
@@ -288,11 +288,11 @@ final class ReleaseManager
                 throw $e;
             }
             if ($overlayPlan !== null) Files::commitOverlay($overlayPlan);
-        } catch (\\Throwable $e) {
+        } catch (\Throwable $e) {
             // In case preflight or publication failed before the rename,
             // never leave an unreferenced prepared public release behind.
             if (is_dir($tmp)) {
-                try { Files::removeTree($tmp); } catch (\\Throwable) {}
+                try { Files::removeTree($tmp); } catch (\Throwable) {}
             }
             throw $e;
         }
