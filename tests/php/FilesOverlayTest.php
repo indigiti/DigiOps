@@ -97,5 +97,30 @@ if(file_get_contents($rollbackTarget.'/engine')!=='new-engine') throw new Runtim
 Files::rollbackOverlay($rollbackPlan);
 if(file_get_contents($rollbackTarget.'/engine')!=='old-engine') throw new RuntimeException('OVERLAY_ATOMIC_RESTORE_FAILED');
 
+// A live executable must be replaced by a new inode, not written in place.
+$liveSource=$root.'/live-source';
+$liveTarget=$root.'/live-target';
+Files::ensureDir($liveSource.'/app/bin');
+Files::ensureDir($liveTarget.'/app/bin');
+$srcBin=$liveSource.'/app/bin/qsyn-stream';
+$dstBin=$liveTarget.'/app/bin/qsyn-stream';
+file_put_contents($srcBin,'new-rust-binary');
+file_put_contents($dstBin,'old-rust-binary');
+chmod($srcBin,0750);
+chmod($dstBin,0750);
+$oldHandle=fopen($dstBin,'rb');
+$oldInode=fileinode($dstBin);
+$livePlan=Files::beginOverlay($liveSource,$liveTarget,$root.'/backup-live');
+Files::applyOverlay($livePlan);
+clearstatcache(true,$dstBin);
+if(file_get_contents($dstBin)!=='new-rust-binary')throw new RuntimeException('LIVE_BINARY_PUBLISH_FAILED');
+if(fileinode($dstBin)===$oldInode)throw new RuntimeException('LIVE_BINARY_OVERWRITTEN_IN_PLACE');
+if((fileperms($dstBin)&0777)!==0750)throw new RuntimeException('LIVE_BINARY_MODE_CHANGED');
+rewind($oldHandle);
+if(stream_get_contents($oldHandle)!=='old-rust-binary')throw new RuntimeException('LIVE_BINARY_OLD_INODE_MODIFIED');
+fclose($oldHandle);
+Files::rollbackOverlay($livePlan);
+if(file_get_contents($dstBin)!=='old-rust-binary')throw new RuntimeException('LIVE_BINARY_ROLLBACK_FAILED');
+
 Files::removeTree($root);
 echo "FilesOverlayTest PASS\n";
