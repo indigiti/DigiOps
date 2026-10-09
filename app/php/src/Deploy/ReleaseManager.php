@@ -256,12 +256,46 @@ final class ReleaseManager
         $tmp = dirname($publicTarget) . '/.' . $slug . '.rollback-' . bin2hex(random_bytes(4));
         Files::copyDir($publicSource, $tmp);
 
-        if ($privateSource !== null) {
-            Files::ensureDir($privateTarget);
-            Files::copyDir($privateSource, $privateTarget);
-        }
+        // Rollbacks must be safe for actively executing private binaries.
+        // A plain copyDir() overwrites the running inode and can fail with
+        // ETXTBSY; use the same verified atomic overlay as deployArtifact().
+        $overlayPlan=null;
+        try {
+            if ($privateSource !== null) {
+                $overlayPlan=Files::beginOverlay(
+                    $privateSource,
+                    $privateTarget,
+                    $runtime . '/overlay-backup/rollback-' . bin2hex(random_bytes(8))
+                );
+                Files::applyOverlay($overlayPlan);
+            }
 
-        $this->switcher->switch($tmp, $publicTarget, $slug);
+            try {
+                $this->switcher->switch($tmp, $publicTarget, $slug);
+            } catch (\Throwable $e) {
+                if ($overlayPlan !== null) {
+                    try {
+                        Files::rollbackOverlay($overlayPlan);
+                    } catch (\Throwable $restore) {
+                        throw new RuntimeException(
+                            'ROLLBACK_PUBLICATION_FAILED_PRIVATE_RESTORE_FAILED:'
+                            . $e->getMessage() . ':' . $restore->getMessage(),
+                            0,
+                            $e
+                        );
+                    }
+                }
+                throw $e;
+            }
+            if ($overlayPlan !== null) Files::commitOverlay($overlayPlan);
+        } catch (\Throwable $e) {
+            // In case preflight or publication failed before the rename,
+            // never leave an unreferenced prepared public release behind.
+            if (is_dir($tmp)) {
+                try { Files::removeTree($tmp); } catch (\Throwable) {}
+            }
+            throw $e;
+        }
 
         $meta = Files::readJson($releaseRoot . '/meta.json', []);
         $this->projects->patchRuntime($slug, [
