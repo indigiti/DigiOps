@@ -113,13 +113,34 @@ final class Files
             if (isset($skip[$relative])) continue;
             if (is_dir($dest)) throw new RuntimeException('COPY_TYPE_CONFLICT_EXPECTED_FILE:'.$relative);
             self::ensureDir(dirname($dest));
+            if (is_link($dest)) throw new RuntimeException('COPY_TARGET_SYMLINK_NOT_ALLOWED:'.$relative);
             if (!is_readable($item->getPathname())) throw new RuntimeException('COPY_SOURCE_NOT_READABLE:'.$relative);
-            if (is_file($dest) && !is_writable($dest)) throw new RuntimeException('COPY_TARGET_FILE_NOT_WRITABLE:'.$relative);
-            if (!is_file($dest) && !is_writable(dirname($dest))) throw new RuntimeException('COPY_TARGET_DIRECTORY_NOT_WRITABLE:'.$relative);
-            if (!@copy($item->getPathname(), $dest)) {
-                $last=error_get_last();
-                $reason=is_array($last)?preg_replace('/\\s+/',' ',(string)($last['message']??'')):'';
-                throw new RuntimeException('COPY_FAILED:'.$relative.($reason!==''?':'.$reason:''));
+            if (!is_writable(dirname($dest))) throw new RuntimeException('COPY_TARGET_DIRECTORY_NOT_WRITABLE:'.$relative);
+
+            // Never copy into an existing inode: Linux rejects overwriting a
+            // running ELF executable with ETXTBSY ("Text file busy"). Stage
+            // beside the destination and atomically replace the directory
+            // entry instead. An already-running process safely retains its
+            // old inode until a separately managed restart.
+            $tmp=dirname($dest) . '/.' . basename($dest) . '.digiops-' . bin2hex(random_bytes(6));
+            try {
+                if (!@copy($item->getPathname(),$tmp)) {
+                    $last=error_get_last();
+                    $reason=is_array($last)?preg_replace('/\\s+/',' ',(string)($last['message']??'')):'';
+                    throw new RuntimeException('COPY_FAILED:'.$relative.($reason!==''?':'.$reason:''));
+                }
+                // Preserve the currently deployed executable mode when the
+                // release artifact has lost its +x bit during ZIP transport.
+                // New files use the source mode, never broad chmod 0777.
+                $mode=is_file($dest)?@fileperms($dest):@fileperms($item->getPathname());
+                if (is_int($mode) && !@chmod($tmp,$mode & 0777)) {
+                    throw new RuntimeException('COPY_MODE_FAILED:'.$relative);
+                }
+                if (!@rename($tmp,$dest)) {
+                    throw new RuntimeException('COPY_ATOMIC_REPLACE_FAILED:'.$relative);
+                }
+            } finally {
+                if (file_exists($tmp) || is_link($tmp)) @unlink($tmp);
             }
         }
     }
