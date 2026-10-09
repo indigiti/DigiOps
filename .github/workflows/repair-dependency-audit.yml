@@ -18,6 +18,7 @@ jobs:
           node-version: '22'
       - run: npm ci --no-audit
       - run: npm audit fix --force
+      - run: npm install -D @tailwindcss/postcss
       - run: npm audit --audit-level=high
       - run: npm run build
       - name: Commit verified dependency lock
