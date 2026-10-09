@@ -851,6 +851,8 @@ function app(){
       const requestedCommit=this.candidateCommitSha==='—'?'':this.candidateCommitSha
       const requestedRun=this.candidateRunNumber
       const requestedArtifact=this.candidateArtifactId
+      const candidateRunId=this.candidateRun?.id||0
+      const candidateArtifactId=this.candidateArtifact?.id||0
       const requestId=deploymentRequestId()
       const summary='Deploy '+requestedRun+' · artifact '+requestedArtifact+' · '+this.candidateCommitShort+' to '+projectUrl+'?'
       if(!confirm(summary))return
@@ -871,8 +873,8 @@ function app(){
       try{
         const d=await api('./api/deploy.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},signal:deployController.signal,body:JSON.stringify({
           project:projectId,
-          runId:this.candidateRun ? this.candidateRun.id : 0,
-          artifactId:this.candidateArtifact ? this.candidateArtifact.id : 0,
+          runId:candidateRunId,
+          artifactId:candidateArtifactId,
           commit:requestedCommit,
           requestId
         })})
@@ -881,7 +883,7 @@ function app(){
         this.cacheDropProject(projectId)
         await this.loadProjects()
         this.setOperation(97,'Refreshing release history…')
-        await this.loadReleases(true)
+        if(this.selected&&this.selected.id===projectId)await this.loadReleases(true)
         this.setOperation(99,'Running post-deploy health check…')
         const healthOk=this.selected&&this.selected.id===projectId
           ? await this.checkHealth(true,requestId)
