@@ -80,6 +80,7 @@ function app(){
     redisForm:{host:'127.0.0.1',port:6379,username:'',password:'',database:0,prefix:'digiops:',timeout:1.5},
     varnishForm:{enabled:true,bypassPath:'/digiops/',sessionCookie:'DIGIOPSSESSID',apiPath:'/digiops/api/'},
     targetForm:{id:'',name:'',type:'agent',endpoint:'',secret:'',publicBase:'public_html',privateBase:'private_html'},
+    branchDraft:'',
     form:{name:'',repo:'',branch:'main',slug:'',artifactName:'digiops-release',healthPath:'/',retention:5,targetId:'local',url:'',publicPath:'',privatePath:''},
 
     async init(){
@@ -695,12 +696,14 @@ function app(){
           icons();return
         }
         this.selectedId=project.id;this.page='project';this.projectTab=tab
+        if(tab==='settings')this.branchDraft=project.branch
         this.githubInfo=this.cacheGet('github',project.id,120000)
         this.releases=this.cacheGet('releases',project.id,300000)||[]
         this.health=this.cacheGet('health',project.id,60000)||(project.healthDetail&&typeof project.healthDetail==='object'?project.healthDetail:null)
         this.fileListing=null
         if(tab==='releases'&&this.releases.length===0)this.loadReleases(false)
         if(tab==='files'&&!this.fileListing)this.browse('public','',false)
+        if(tab==='settings')void this.loadGithubInfo()
         icons();return
       }
       if(parts[0]==='deployments'){this.page='deployments';this.selectedId=null;await this.syncDeploymentWatches();icons();return}
@@ -767,6 +770,41 @@ function app(){
         }
         await api('./api/projects.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify(payload)})
         this.modal=null;await this.loadProjects();this.notice='Application registered.'
+      }catch(e){this.error=e.message}
+      finally{this.busy=false;icons()}
+    },
+    async changeDeploymentBranch(){
+      if(!this.selected || this.userRole!=='admin' || this.busy)return
+      const project=this.selected
+      const next=String(this.branchDraft||'').trim()
+      if(!next || next===project.branch)return
+      const candidates=this.githubInfo&&Array.isArray(this.githubInfo.branches)?this.githubInfo.branches:[]
+      if(!candidates.some(branch=>branch.name===next)){
+        this.error='Select a verified branch from GitHub. Run Check update first.'
+        return
+      }
+      if(!window.confirm(
+        'Change deployment SOURCE for '+project.name+' from '+project.branch+' to '+next+
+        '? This does not deploy code. Verify this is a STAGING application before using Deploy.'
+      ))return
+      this.clearMessages();this.busy=true
+      try{
+        await api('./api/projects.php',{
+          method:'PATCH',
+          headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},
+          body:JSON.stringify({
+            action:'set-deployment-branch',
+            id:project.id,
+            branch:next,
+            expectedBranch:project.branch
+          })
+        })
+        this.cacheDropProject(project.id)
+        this.githubInfo=null
+        await this.loadProjects()
+        this.branchDraft=next
+        this.notice='Deployment source changed to '+next+'. No deployment was performed. Run Check update.'
+        await this.loadGithubInfo(true)
       }catch(e){this.error=e.message}
       finally{this.busy=false;icons()}
     },
@@ -1435,7 +1473,18 @@ document.querySelector('#app').innerHTML=`
               <div class="stat-card"><i data-lucide="server" class="h-5 w-5 text-violet-600"></i><h3 class="mt-3 font-bold">Runtime</h3><p class="muted mt-1" x-text="healthRuntimeText"></p></div>
             </div>
           </div>
-          <div x-show="projectTab==='settings'" class="panel"><h2 class="font-bold">Application settings</h2><div class="mt-5 grid gap-4 md:grid-cols-2"><div><span class="muted">Repository</span><b class="mt-1 block" x-text="selectedRepo"></b></div><div><span class="muted">Branch</span><b class="mt-1 block" x-text="selectedBranch"></b></div><div><span class="muted">Artifact</span><b class="mt-1 block" x-text="selectedArtifactName"></b></div><div><span class="muted">Application URL</span><code class="mt-1 block break-all text-sm" x-text="selectedUrl"></code></div><div><span class="muted">Health URL</span><code class="mt-1 block break-all text-sm" x-text="selectedHealthUrl"></code><small class="mt-1 block text-slate-500">Health path: <code x-text="selectedHealthPath||'/'"></code></small></div><div><span class="muted">Deployment target</span><b class="mt-1 block" x-text="targetName(selectedTargetId)"></b></div><div><span class="muted">Public path</span><code class="mt-1 block text-xs" x-text="selectedPublicPath"></code></div><div><span class="muted">Private path</span><code class="mt-1 block text-xs" x-text="selectedPrivatePath"></code></div></div></div>
+          <div x-show="projectTab==='settings'" class="panel"><h2 class="font-bold">Application settings</h2>
+            <div x-show="userRole==='admin'" class="mt-5 rounded-xl border border-blue-100 bg-blue-50/50 p-4">
+              <label class="block text-sm font-bold text-slate-900" for="digiops-deploy-source-branch">Deployment candidate source branch</label>
+              <p class="mt-1 text-xs leading-5 text-slate-600">Select a branch for future deployable artifacts. This does not deploy, merge, or change the current release. Verify the application is staging before switching from main.</p>
+              <div class="mt-3 flex flex-wrap gap-2">
+                <select id="digiops-deploy-source-branch" x-model="branchDraft" class="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm" :disabled="busy||!githubInfo||!Array.isArray(githubInfo.branches)">
+                  <template x-for="source in (githubInfo&&Array.isArray(githubInfo.branches)?githubInfo.branches:[])" :key="source.name"><option :value="source.name" x-text="source.name"></option></template>
+                </select>
+                <button class="btn btn-primary" @click="changeDeploymentBranch()" :disabled="busy||!githubInfo||!Array.isArray(githubInfo.branches)||!branchDraft||branchDraft===selectedBranch">Change source branch</button>
+              </div>
+              <p class="mt-2 text-xs text-slate-500" x-show="!githubInfo||!Array.isArray(githubInfo.branches)">GitHub branch list loading. Use Check update if it does not appear.</p>
+            </div><div class="mt-5 grid gap-4 md:grid-cols-2"><div><span class="muted">Repository</span><b class="mt-1 block" x-text="selectedRepo"></b></div><div><span class="muted">Branch</span><b class="mt-1 block" x-text="selectedBranch"></b></div><div><span class="muted">Artifact</span><b class="mt-1 block" x-text="selectedArtifactName"></b></div><div><span class="muted">Application URL</span><code class="mt-1 block break-all text-sm" x-text="selectedUrl"></code></div><div><span class="muted">Health URL</span><code class="mt-1 block break-all text-sm" x-text="selectedHealthUrl"></code><small class="mt-1 block text-slate-500">Health path: <code x-text="selectedHealthPath||'/'"></code></small></div><div><span class="muted">Deployment target</span><b class="mt-1 block" x-text="targetName(selectedTargetId)"></b></div><div><span class="muted">Public path</span><code class="mt-1 block text-xs" x-text="selectedPublicPath"></code></div><div><span class="muted">Private path</span><code class="mt-1 block text-xs" x-text="selectedPrivatePath"></code></div></div></div>
         </section>
 
         <section data-digiops-page="deployments" x-show="page==='deployments'" class="space-y-6">
