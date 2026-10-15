@@ -70,6 +70,39 @@ $healthRegistry->patchRuntime('qsyn',[
         'runtime'=>['php'=>'8.4.0','curl'=>true,'zip'=>true,'sodium'=>true],
     ],
 ]);
+// A staging candidate branch change must not change deployed runtime identity.
+$healthRegistry->patchRuntime('qsyn',[
+    'commit'=>'ff36c71075df786f84dd0f07e0225d3f22d119c3',
+    'release'=>'release-95',
+    'lastDeploy'=>'2026-10-15T12:00:00+05:30',
+]);
+$beforeSwitch=$healthRegistry->find('qsyn');
+$switched=$healthRegistry->setDeploymentBranch(
+    'qsyn', 'main', 'fix/staging-audit-theme-reliability-20261015'
+);
+if (($switched['branch']??'')!=='fix/staging-audit-theme-reliability-20261015') {
+    throw new RuntimeException('DEPLOY_CANDIDATE_BRANCH_NOT_CHANGED');
+}
+foreach (['commit','release','lastDeploy','health','healthDetail','url','publicPath','privatePath','targetId'] as $field) {
+    if (($switched[$field]??null)!==($beforeSwitch[$field]??null)) {
+        throw new RuntimeException('BRANCH_SWITCH_MODIFIED_ACTIVE_STATE_'.$field);
+    }
+}
+if (($switched['update']??true)!==false) throw new RuntimeException('BRANCH_SWITCH_STALE_UPDATE');
+try{
+    $healthRegistry->setDeploymentBranch('qsyn','main','main');
+    throw new RuntimeException('STALE_SOURCE_BRANCH_WRITE_ACCEPTED');
+}catch(RuntimeException $e){
+    if($e->getMessage()!=='DEPLOY_BRANCH_CHANGED_RETRY')throw $e;
+}
+try{
+    $healthRegistry->setDeploymentBranch('qsyn','fix/staging-audit-theme-reliability-20261015','../bad');
+    throw new RuntimeException('UNSAFE_SOURCE_BRANCH_ACCEPTED');
+}catch(InvalidArgumentException $e){
+    if($e->getMessage()!=='INVALID_BRANCH')throw $e;
+}
+$healthRegistry->setDeploymentBranch('qsyn','fix/staging-audit-theme-reliability-20261015','main');
+
 $healthProject=$healthRegistry->find('qsyn');
 if(($healthProject['healthDetail']['url']??'')!=='https://stage.digiti.in/qsyn/') throw new RuntimeException('HEALTH_DETAIL_URL_NOT_PERSISTED');
 if((int)($healthProject['healthDetail']['http']['status']??0)!==200) throw new RuntimeException('HEALTH_DETAIL_HTTP_NOT_PERSISTED');

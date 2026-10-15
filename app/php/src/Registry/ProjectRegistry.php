@@ -51,6 +51,45 @@ final class ProjectRegistry
         return $record;
     }
 
+    /**
+     * Switch the source of future deployable candidates only.
+     *
+     * The deployed commit, release, health, target, and Cloudways paths are
+     * intentionally unchanged. Expected branch guards against stale UI writes.
+     */
+    public function setDeploymentBranch(string $id, string $expectedBranch, string $branch): array
+    {
+        $id = PathGuard::slug($id);
+        $expectedBranch = trim($expectedBranch);
+        $branch = trim($branch);
+        if (!preg_match('#^[A-Za-z0-9._/-]{1,160}$#', $branch)
+            || str_contains($branch, '..')
+            || str_contains($branch, '//')
+            || str_starts_with($branch, '/')
+            || str_ends_with($branch, '/')
+            || str_ends_with($branch, '.lock')) {
+            throw new InvalidArgumentException('INVALID_BRANCH');
+        }
+        return Files::withLock($this->file . '.lock', function() use ($id, $expectedBranch, $branch): array {
+            $all = $this->allUnlocked();
+            foreach ($all as $index => $project) {
+                if ($project['id'] !== $id) continue;
+                if ($project['branch'] !== $expectedBranch) {
+                    throw new RuntimeException('DEPLOY_BRANCH_CHANGED_RETRY');
+                }
+                $updated = $this->normalize(array_merge($project, [
+                    'branch' => $branch,
+                    'update' => false,
+                ]));
+                $this->validateRecord($updated);
+                $all[$index] = $updated;
+                Files::writeJson($this->file, $all);
+                return $updated;
+            }
+            throw new RuntimeException('PROJECT_NOT_FOUND');
+        });
+    }
+
     public function delete(string $id): void
     {
         $id = PathGuard::slug($id);
