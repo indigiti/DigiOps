@@ -65,7 +65,7 @@ function app(){
   return {
     ready:false, installed:false, user:null, csrf:null, authMode:'login',
     sidebarOpen:false, helpOpen:false, helpTopic:'dashboard', page:'dashboard', projectTab:'overview', query:'', filter:'all', routeReady:false,
-    projects:[], targets:[], selectedId:null, releases:[], githubInfo:null, fileListing:null, health:null, audit:[],
+    projects:[], targets:[], selectedId:null, releases:[], githubInfo:null, candidateBranchChoice:'', fileListing:null, health:null, audit:[],
     detailCache:{github:{},releases:{},health:{},files:{}}, requestPool:{},
     modal:null, busy:false, notice:'', error:'', operationTimer:null,
     deploymentWatches:[], deploymentJobs:[], verificationJobId:null, deploymentWatchTimer:null, deploymentWatchBusy:false,
@@ -116,7 +116,11 @@ function app(){
     },
     cacheDropProject(id){
       for(const bucket of ['github','releases','health']){
-        if(this.detailCache[bucket])delete this.detailCache[bucket][id]
+        if(this.detailCache[bucket]){
+          for(const key of Object.keys(this.detailCache[bucket])){
+            if(key===id||key.startsWith(id+'|'))delete this.detailCache[bucket][key]
+          }
+        }
       }
       if(this.detailCache.files){
         for(const key of Object.keys(this.detailCache.files)){
@@ -280,6 +284,8 @@ function app(){
     get selectedName(){return this.selected ? this.selected.name : ''},
     get selectedRepo(){return this.selected ? this.selected.repo : ''},
     get selectedBranch(){return this.selected ? this.selected.branch : ''},
+    get selectedIsStage(){return !!this.selected && ['stage','staging'].includes(String(this.selected.environment||'').toLowerCase())},
+    get candidateSelectionBranch(){return this.candidateBranchChoice.trim()||this.selectedBranch},
     get selectedUrl(){return this.selected ? this.selected.url : ''},
     get selectedPublicPath(){return this.selected ? this.selected.publicPath : ''},
     get selectedPrivatePath(){return this.selected ? this.selected.privatePath : ''},
@@ -694,8 +700,9 @@ function app(){
           if(replaceInvalid)history.replaceState({},'',appUrl('apps'))
           icons();return
         }
+        if(this.selectedId!==project.id)this.candidateBranchChoice=''
         this.selectedId=project.id;this.page='project';this.projectTab=tab
-        this.githubInfo=this.cacheGet('github',project.id,120000)
+        this.githubInfo=this.cacheGet('github',project.id+'|'+this.candidateBranchChoice,120000)
         this.releases=this.cacheGet('releases',project.id,300000)||[]
         this.health=this.cacheGet('health',project.id,60000)||(project.healthDetail&&typeof project.healthDetail==='object'?project.healthDetail:null)
         this.fileListing=null
@@ -794,18 +801,27 @@ function app(){
         this.error=e.message;this.failOperation('Update check failed: '+e.message)
       }finally{this.busy=false;icons()}
     },
+    async changeCandidateBranch(){
+      this.githubInfo=null
+      this.clearMessages()
+      await this.checkUpdate()
+    },
     async loadGithubInfo(force=false){
       if(!this.selected)return false
       const id=this.selected.id
-      const cached=!force?this.cacheGet('github',id,120000):null
+      const candidateBranch=this.candidateBranchChoice.trim()
+      const cacheKey=id+'|'+candidateBranch
+      const cached=!force?this.cacheGet('github',cacheKey,120000):null
       if(cached){
         this.githubInfo=cached
         icons()
         return true
       }
       try{
-        const data=await this.singleFlight('github:'+id,()=>api('./api/github.php?project='+encodeURIComponent(id)))
-        this.githubInfo=this.cachePut('github',id,data)
+        const suffix=candidateBranch?'&candidateBranch='+encodeURIComponent(candidateBranch):''
+        const data=await this.singleFlight('github:'+cacheKey,()=>api('./api/github.php?project='+encodeURIComponent(id)+suffix))
+        this.cachePut('github',cacheKey,data)
+        if(this.selected?.id===id && this.candidateBranchChoice.trim()===candidateBranch)this.githubInfo=data
         await this.loadProjects()
         icons()
         return true
@@ -841,11 +857,16 @@ function app(){
         this.error='No verified deployment candidate is ready. Run Check update first.'
         return
       }
+      const selectedReleaseBranch=this.candidateSelectionBranch
+      if(this.candidate?.requestedBranch!==selectedReleaseBranch || this.candidateRun?.branch!==selectedReleaseBranch){
+        this.error='Release branch changed or candidate is stale. Run Check update again.'
+        return
+      }
       const requestedCommit=this.candidateCommitSha==='—'?'':this.candidateCommitSha
       const requestedRun=this.candidateRunNumber
       const requestedArtifact=this.candidateArtifactId
       const requestId=deploymentRequestId()
-      const summary='Deploy '+requestedRun+' · artifact '+requestedArtifact+' · '+this.candidateCommitShort+' to '+this.selected.url+'?'
+      const summary='Deploy '+requestedRun+' · artifact '+requestedArtifact+' · '+this.candidateCommitShort+' from '+selectedReleaseBranch+' to '+this.selected.url+'?'
       if(!confirm(summary))return
       this.clearMessages();this.busy=true
       this.queueDeploymentWatch({projectId:this.selected.id,projectName:this.selectedName,commit:requestedCommit,requestId,run:requestedRun,artifact:requestedArtifact,status:'queued',phase:'starting',progress:6})
@@ -866,6 +887,7 @@ function app(){
           project:this.selected.id,
           runId:this.candidateRun ? this.candidateRun.id : 0,
           artifactId:this.candidateArtifact ? this.candidateArtifact.id : 0,
+          candidateBranch:selectedReleaseBranch,
           commit:requestedCommit,
           requestId
         })})
@@ -1321,6 +1343,13 @@ document.querySelector('#app').innerHTML=`
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div><p class="text-sm font-medium text-blue-600">Deployment Candidate</p><h2 class="mt-1 text-xl font-bold">Exact build identification</h2><p class="muted mt-2">Review the successful workflow, artifact and commit that DigiOps will deploy. These identifiers are passed back to the deploy endpoint to prevent candidate drift.</p></div>
                 <span class="pill" :class="candidateReady?'border-emerald-200 bg-emerald-50 text-emerald-700':'border-amber-200 bg-amber-50 text-amber-700'"><span class="status-dot" :class="candidateReady?'bg-emerald-500':'bg-amber-500'"></span><span x-text="deployableStatusText"></span></span>
+              </div>
+
+              <div x-show="selectedIsStage" class="mt-5 rounded-xl border border-slate-200 p-4">
+                <label for="stagingCandidateBranch" class="mb-2 block text-sm font-semibold">Release source branch</label>
+                <input id="stagingCandidateBranch" class="input w-full" type="text" x-model.trim="candidateBranchChoice" @change="changeCandidateBranch()" :disabled="busy" placeholder="Leave blank for configured branch" autocomplete="off" spellcheck="false" />
+                <p class="mt-2 text-xs text-slate-500">Default: <code x-text="selectedBranch"></code>. For an approved staging candidate, enter its exact <code>staging/...</code> branch (for example, <code>staging/vela-0.8.4-rc1</code>) and select Check update. This does not alter the application's configured source branch.</p>
+                <p x-show="candidateBranchChoice" class="mt-2 text-xs font-semibold text-amber-700">Staging override selected — verify the exact run, artifact and commit before approval.</p>
               </div>
 
               <div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

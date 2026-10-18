@@ -39,7 +39,8 @@ try {
     $repo=$client->repo($project['repo']);
     $branches=$client->branches($project['repo']);
     $commits=$client->commits($project['repo'],$project['branch'],50);
-    $runs=$client->workflowRuns($project['repo'],$project['branch'],20);
+    $candidateBranch=DeploymentCandidateSelector::candidateBranch($project,(string)($_GET['candidateBranch']??''));
+    $runs=$client->workflowRuns($project['repo'],$candidateBranch,20);
     $workflowRuns=$runs['workflow_runs']??[];
 
     $latestSha=(string)($commits[0]['sha']??'');
@@ -61,7 +62,8 @@ try {
     $deployableReady=$successfulRun!==null && $candidateArtifact!==null && !($candidateArtifact['expired']??false);
     $deployableUpdate=$deployableReady && $candidateSha!=='' && $candidateSha!==$deployedCommit;
     $sourceUpdate=$latestSha!=='' && $latestSha!==$deployedCommit;
-    $branchAhead=$candidateSha!=='' && $latestSha!=='' && $candidateSha!==$latestSha;
+    $onSourceBranch=$candidateBranch===$project['branch'];
+    $branchAhead=$onSourceBranch && $candidateSha!=='' && $latestSha!=='' && $candidateSha!==$latestSha;
 
     $deployedIndex=null;
     $candidateIndex=null;
@@ -70,8 +72,8 @@ try {
         if ($deployedIndex===null && $deployedCommit!=='' && $sha===$deployedCommit) $deployedIndex=$index;
         if ($candidateIndex===null && $candidateSha!=='' && $sha===$candidateSha) $candidateIndex=$index;
     }
-    $sourceCommitsAhead=is_int($deployedIndex) ? $deployedIndex : null;
-    $deployableCommitsAhead=(is_int($deployedIndex) && is_int($candidateIndex) && $deployedIndex >= $candidateIndex)
+    $sourceCommitsAhead=$onSourceBranch && is_int($deployedIndex) ? $deployedIndex : null;
+    $deployableCommitsAhead=($onSourceBranch && is_int($deployedIndex) && is_int($candidateIndex) && $deployedIndex >= $candidateIndex)
         ? $deployedIndex-$candidateIndex
         : null;
 
@@ -112,6 +114,9 @@ try {
             'health'=>$project['health']??'pending',
         ],
         'candidate'=>[
+            'requestedBranch'=>$candidateBranch,
+            'sourceBranch'=>$project['branch'],
+            'stagingSelection'=>!$onSourceBranch,
             'ready'=>$deployableReady,
             'reason'=>$candidateReason,
             'updateAvailable'=>$deployableUpdate,
@@ -130,7 +135,7 @@ try {
                 'status'=>$successfulRun['status']??'',
                 'conclusion'=>$successfulRun['conclusion']??null,
                 'sha'=>$candidateSha,
-                'branch'=>$successfulRun['head_branch']??$project['branch'],
+                'branch'=>$successfulRun['head_branch']??$candidateBranch,
                 'createdAt'=>$successfulRun['created_at']??null,
                 'updatedAt'=>$successfulRun['updated_at']??null,
                 'url'=>$successfulRun['html_url']??null,

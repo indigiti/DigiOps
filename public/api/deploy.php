@@ -38,11 +38,16 @@ try {
     $projectId=(string)($data['project']??'');
     $project=(new ProjectRegistry())->find($projectId);
     if (!$project) throw new RuntimeException('PROJECT_NOT_FOUND');
+    $candidateBranch=DeploymentCandidateSelector::candidateBranch($project,(string)($data['candidateBranch']??''));
 
     $runId=(int)($data['runId']??0);
     $artifactId=(int)($data['artifactId']??0);
     $commit=strtolower(trim((string)($data['commit']??'')));
     $requestId=strtolower(trim((string)($data['requestId']??'')));
+    if ($candidateBranch!==$project['branch']
+        && ($runId<=0 || $artifactId<=0 || !preg_match('/^[a-f0-9]{40}$/',$commit))) {
+        throw new RuntimeException('DEPLOY_STAGING_REQUIRES_EXACT_CANDIDATE');
+    }
     if($requestId==='' || !preg_match('/^[a-f0-9]{32}$/',$requestId)) $requestId=bin2hex(random_bytes(16));
 
     foreach($jobs->active($projectId) as $activeJob){
@@ -65,6 +70,7 @@ try {
         'commit'=>$commit,
         'runId'=>$runId,
         'artifactId'=>$artifactId,
+        'candidateBranch'=>$candidateBranch,
         'requestedBy'=>(string)($user['username']??'operator'),
         'state'=>'running',
         'phase'=>'candidate-validation',
@@ -85,9 +91,7 @@ try {
         if (($run['status']??'')!=='completed' || ($run['conclusion']??'')!=='success') {
             throw new RuntimeException('DEPLOY_WORKFLOW_NOT_SUCCESSFUL');
         }
-        if ((string)($run['head_branch']??'') !== (string)$project['branch']) {
-            throw new RuntimeException('DEPLOY_WORKFLOW_BRANCH_MISMATCH');
-        }
+        DeploymentCandidateSelector::assertRunBranch($run,$candidateBranch);
         $runCommit=strtolower((string)($run['head_sha']??''));
         if ($commit!=='' && $runCommit!=='' && !hash_equals($runCommit,$commit)) {
             throw new RuntimeException('DEPLOY_COMMIT_MISMATCH');
@@ -102,7 +106,7 @@ try {
         if ($artifact===null) throw new RuntimeException('DEPLOY_ARTIFACT_NAME_MISMATCH');
         $artifactId=(int)($artifact['id']??0);
     } else {
-        $runs=$client->workflowRuns($project['repo'],$project['branch'],20)['workflow_runs']??[];
+        $runs=$client->workflowRuns($project['repo'],$candidateBranch,20)['workflow_runs']??[];
         $selection=DeploymentCandidateSelector::find(
             is_array($runs)?$runs:[],
             fn(int $candidateRunId): array => $client->artifacts($project['repo'],$candidateRunId),
@@ -114,6 +118,7 @@ try {
         $runId=(int)($run['id']??0);
         $artifactId=(int)($artifact['id']??0);
         $commit=strtolower((string)($run['head_sha']??$commit));
+        DeploymentCandidateSelector::assertRunBranch($run,$candidateBranch);
     }
 
     if ($runId<=0 || $artifactId<=0 || !preg_match('/^[a-f0-9]{40}$/',$commit)) throw new RuntimeException('DEPLOY_CANDIDATE_INVALID');
@@ -124,6 +129,7 @@ try {
         'runNumber'=>(int)($run['run_number']??0),
         'artifactId'=>$artifactId,
         'artifactDigest'=>$artifactDigest,
+        'candidateBranch'=>$candidateBranch,
         'phase'=>'preflight',
         'progress'=>12,
         'verificationSource'=>'control-plane-preflight',
