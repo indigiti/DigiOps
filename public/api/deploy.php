@@ -44,6 +44,10 @@ try {
     $artifactId=(int)($data['artifactId']??0);
     $commit=strtolower(trim((string)($data['commit']??'')));
     $requestId=strtolower(trim((string)($data['requestId']??'')));
+    if ($candidateBranch!==$project['branch']
+        && ($runId<=0 || $artifactId<=0 || !preg_match('/^[a-f0-9]{40}$/',$commit))) {
+        throw new RuntimeException('DEPLOY_STAGING_REQUIRES_EXACT_CANDIDATE');
+    }
     if($requestId==='' || !preg_match('/^[a-f0-9]{32}$/',$requestId)) $requestId=bin2hex(random_bytes(16));
 
     foreach($jobs->active($projectId) as $activeJob){
