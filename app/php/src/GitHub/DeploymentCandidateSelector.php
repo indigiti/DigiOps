@@ -5,6 +5,31 @@ namespace DigiOps\GitHub;
 
 final class DeploymentCandidateSelector
 {
+    public static function candidateBranch(array $project, ?string $requested = null): string
+    {
+        $source = (string)($project['branch'] ?? 'main');
+        $requested = trim((string)$requested);
+        if ($requested === '' || $requested === $source) return $source;
+
+        $environment = strtolower(trim((string)($project['environment'] ?? '')));
+        if (!in_array($environment, ['stage', 'staging'], true)) {
+            throw new \RuntimeException('DEPLOY_STAGING_TARGET_REQUIRED');
+        }
+        if (strlen($requested) > 160
+            || !preg_match('#^(staging/[A-Za-z0-9._/-]+|fix/staging-[A-Za-z0-9._/-]+)$#D', $requested)
+            || str_contains($requested, '..') || str_contains($requested, '//')
+            || str_ends_with($requested, '/') || str_ends_with($requested, '.')) {
+            throw new \RuntimeException('DEPLOY_STAGING_BRANCH_INVALID');
+        }
+        return $requested;
+    }
+
+    public static function assertRunBranch(array $run, string $selectedBranch): void
+    {
+        if ((string)($run['head_branch'] ?? '') !== $selectedBranch) {
+            throw new \RuntimeException('DEPLOY_WORKFLOW_BRANCH_MISMATCH');
+        }
+    }
     public static function exactArtifact(array $artifacts, string $wanted, ?int $artifactId = null): ?array
     {
         $wanted=trim($wanted) ?: 'digiops-release';
