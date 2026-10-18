@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>KrushiWorld Secure Setup · DigiOps</title>
+<style>
+:root{font:16px system-ui,sans-serif;color:#113029;background:#f5f8f4}*{box-sizing:border-box}body{margin:0;padding:24px}.shell{max-width:850px;margin:auto}
+header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 0}h1{font-size:clamp(1.8rem,3vw,2.6rem);margin:.7rem 0}
+.panel{background:white;border:1px solid #dae5de;border-radius:18px;padding:24px;margin:18px 0;box-shadow:0 4px 24px #162f2510}
+label{display:block;font-weight:600;margin:12px 0 6px}input{width:100%;min-height:46px;border:1px solid #b9cfc2;border-radius:10px;padding:12px;font:inherit}
+button{background:#076a41;color:white;border:0;padding:13px 22px;border-radius:11px;cursor:pointer;font:inherit;margin-top:15px}button:disabled{opacity:.45;cursor:default}
+button.secondary{background:#e8f4ec;color:#14523c;border:1px solid #b8ddc6}
+.help{color:#627b70;line-height:1.6}#status,#notice{white-space:pre-wrap}
+.secret{padding:14px;border:1px solid #c6dec6;background:#f2faf4;border-radius:12px;overflow-wrap:anywhere}
+a{color:#075e42}.hide{display:none}code{font-size:.92rem}ol li{margin:.5em 0}
+</style>
+<script src="/digiops/krushiworld-setup.js" defer></script>
+</head><body><div class="shell">
+<header><strong>🌿 DigiOps · KrushiWorld</strong><a href="/digiops/">Back to DigiOps</a></header>
+<h1>Secure browser setup</h1>
+<p class="help">Manage the APMC national market API key and create the first KrushiPulse Super Admin without an SSH terminal. Available only to a signed-in DigiOps administrator for the local KrushiWorld application.</p>
+<div class="panel" id="notices"><p id="notice" role="status">Checking your DigiOps session…</p></div>
+<div class="panel hide" id="setup">
+<h2>1 · Activate staging &amp; configure AGMARKNET</h2>
+<p class="help">Saves settings in <code>private_html/krushiworld/storage/config/runtime.json</code> with owner-only permissions. Your data.gov.in key is never shown again or stored in the release.</p>
+<p id="status" class="help"></p>
+<label for="apiKey">data.gov.in API key (leave blank to keep existing)</label>
+<input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your data.gov.in API key">
+<button id="save" type="button">Save private settings</button>
+<h2>2 · Set up first Super Admin</h2>
+<p class="help">Generate a one-time setup code, then enter it on KrushiPulse with your chosen username and password. It expires in 15 minutes.</p>
+<button id="grant" class="secondary" type="button">Generate one-time setup code</button>
+<div id="grantDetails" class="hide">
+<label>One-time setup code (shown once)</label><div class="secret"><code id="grantValue"></code></div>
+<button id="copy" class="secondary" type="button">Copy setup code</button>
+</div>
+<ol class="help">
+<li>Deploy the KrushiWorld build that includes the browser setup form.</li>
+<li>Open <a href="/krushiworld/admin/" target="_blank" rel="noopener noreferrer">KrushiPulse Admin</a> and use the DigiOps setup code to create your account.</li>
+<li>Save the authenticator key and recovery codes, then sign in with MFA.</li>
+<li>Verify market imports at <a href="/krushiworld/?api=markets" target="_blank" rel="noopener noreferrer">Market API</a>.</li>
+</ol>
+</div></div></body></html>
