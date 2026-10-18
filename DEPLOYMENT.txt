@@ -7,10 +7,10 @@ Cloudways settings:
 
 Pinned verified runtime:
 - version: DigiOps v1.8.7
-- main commit: 1681af76665d9f7985c76338b46fef778de073c6
+- main commit: 6cc52537d67103a31eeb2ba45ed2f29397789d7e
 - artifact: digiops-release
-- artifact id: 12127315382
-- artifact digest: sha256:61515a9b4dc32ec77602bff63cf32fe65cf5eac926817a5295509107cdbc45b7
+- artifact id: 12146750085
+- artifact digest: sha256:521277450669b466022ee9838242352457a67292379e0dbeff5a3c26a76cd9d5
 
 After Cloudways Pull, open:
 https://stage.digiti.in/digiops/?bootstrap=1
