@@ -51,6 +51,33 @@ final class ProjectRegistry
         return $record;
     }
 
+    public function updateSource(string $id, string $repo, string $branch, string $expectedRepo, string $expectedBranch): array
+    {
+        $id = PathGuard::slug($id);
+        $repo = trim($repo);
+        $branch = trim($branch);
+        if (!preg_match('#^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$#', $repo)) throw new InvalidArgumentException('INVALID_REPOSITORY');
+        if (!preg_match('/^[A-Za-z0-9._\\/-]{1,160}$/', $branch)) throw new InvalidArgumentException('INVALID_BRANCH');
+
+        return Files::withLock($this->file . '.lock', function() use ($id, $repo, $branch, $expectedRepo, $expectedBranch): array {
+            $all = $this->allUnlocked();
+            foreach ($all as $i => $project) {
+                if ($project['id'] !== $id) continue;
+                if ($project['repo'] !== $expectedRepo || $project['branch'] !== $expectedBranch) {
+                    throw new RuntimeException('PROJECT_SOURCE_CHANGED_RELOAD');
+                }
+                $project['repo'] = $repo;
+                $project['branch'] = $branch;
+                $project['update'] = false;
+                $this->validateRecord($project);
+                $all[$i] = $project;
+                Files::writeJson($this->file, $all);
+                return $project;
+            }
+            throw new RuntimeException('PROJECT_NOT_FOUND');
+        });
+    }
+
     public function delete(string $id): void
     {
         $id = PathGuard::slug($id);

@@ -25,6 +25,18 @@ try {
         (new AuditLog())->write('PROJECT_UPSERT',['project'=>$project['id'],'repo'=>$project['repo'],'targetId'=>$project['targetId']??'local'],$user);
         JsonResponse::send(['ok'=>true,'project'=>$project]);
     }
+    if ($method==='PATCH') {
+        $id=(string)($data['id']??'');
+        $previous=$registry->find($id);
+        if ($previous===null) throw new RuntimeException('PROJECT_NOT_FOUND');
+        $project=$registry->updateSource($id,(string)($data['repo']??''),(string)($data['branch']??''),(string)($data['expectedRepo']??''),(string)($data['expectedBranch']??''));
+        (new AuditLog())->write('PROJECT_SOURCE_UPDATE',[
+            'project'=>$project['id'],
+            'oldRepo'=>$previous['repo'],'newRepo'=>$project['repo'],
+            'oldBranch'=>$previous['branch'],'newBranch'=>$project['branch']
+        ],$user);
+        JsonResponse::send(['ok'=>true,'project'=>$project]);
+    }
     if ($method==='DELETE') {
         $id=(string)($data['id']??'');
         $registry->delete($id);
