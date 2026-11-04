@@ -69,3 +69,10 @@ Deployment is a handoff, not a blocking page state.
 - The UI distinguishes **deployed + health verified**, **deployed + health needs attention**, and **deployed + health verification unavailable**.
 - A second deploy for the same application is disabled while an active deployment watch exists.
 - If the browser is completely closed, server deployment continues; the next DigiOps session reconstructs active work from the server journal and resumes authoritative verification.
+
+
+## Premium dual appearance
+
+The light theme follows the supplied premium reference: near-black headings and actions, white/off-white workspace, compact light icon rail, subtle rounded cards, pill controls and one restrained pastel-blue-to-warm-amber accent area. The paired dark theme uses identical typography, spacing and layout with graphite surfaces. Both themes use the CSS tokens in `src/premium-theme.css`.
+
+A topbar moon/sun toggle persists the selected theme locally and defaults to light. Sidebar expanded/compact preference is also saved per browser; mobile shows full sidebar labels. The six most recently opened apps appear above the registry and on the Command Center, using a per-user, per-browser history. Future cross-device recency requires private server-side user preferences; do not infer it from deployment timestamps.
