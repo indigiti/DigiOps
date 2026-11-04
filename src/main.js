@@ -1,13 +1,17 @@
 import Alpine from '@alpinejs/csp'
-import { createIcons, Activity, AppWindow, ArrowLeft, BookOpen, Boxes, CheckCircle2, ChevronDown, CircleGauge, CircleHelp, Cloud, FileClock, FileText, FolderGit2, GitBranch, Github, Globe2, HardDrive, HeartPulse, History, LayoutDashboard, ListFilter, LockKeyhole, LogOut, Menu, MoreVertical, PackageCheck, Plus, RefreshCw, Rocket, Search, Server, Settings2, ShieldCheck, UserRound, X, Zap } from 'lucide'
+import { createIcons, Activity, AppWindow, ArrowLeft, BookOpen, Boxes, CheckCircle2, ChevronDown, CircleGauge, CircleHelp, Cloud, FileClock, FileText, FolderGit2, GitBranch, Github, Globe2, HardDrive, HeartPulse, History, LayoutDashboard, ListFilter, LockKeyhole, LogOut, Menu, Moon, MoreVertical, PackageCheck, PanelLeft, Plus, RefreshCw, Rocket, Search, Server, Settings2, ShieldCheck, Sun, UserRound, X, Zap } from 'lucide'
 import './styles.css'
+import './premium-theme.css'
 
 window.Alpine = Alpine
-const ICONS={Activity,AppWindow,ArrowLeft,BookOpen,Boxes,CheckCircle2,ChevronDown,CircleGauge,CircleHelp,Cloud,FileClock,FileText,FolderGit2,GitBranch,Github,Globe2,HardDrive,HeartPulse,History,LayoutDashboard,ListFilter,LockKeyhole,LogOut,Menu,MoreVertical,PackageCheck,Plus,RefreshCw,Rocket,Search,Server,Settings2,ShieldCheck,UserRound,X,Zap}
+const ICONS={Activity,AppWindow,ArrowLeft,BookOpen,Boxes,CheckCircle2,ChevronDown,CircleGauge,CircleHelp,Cloud,FileClock,FileText,FolderGit2,GitBranch,Github,Globe2,HardDrive,HeartPulse,History,LayoutDashboard,ListFilter,LockKeyhole,LogOut,Menu,Moon,MoreVertical,PackageCheck,PanelLeft,Plus,RefreshCw,Rocket,Search,Server,Settings2,ShieldCheck,Sun,UserRound,X,Zap}
 const icons=()=>queueMicrotask(()=>createIcons({icons:ICONS}))
 const APP_BASE=(import.meta.env.BASE_URL||'/digiops/').replace(/\/+$/,'')+'/'
 const appUrl=(path='')=>APP_BASE+String(path||'').replace(/^\/+/,'')
 const deploymentRequestId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('')
+const readPreference=(key,fallback)=>{try{return localStorage.getItem(key)??fallback}catch{return fallback}}
+const savePreference=(key,value)=>{try{localStorage.setItem(key,value)}catch{}}
+
 
 const HELP_TOPICS={
   dashboard:{title:'Command Center',intro:'A last-known operational summary. Opening this page does not fan out to GitHub or remote targets.',items:['Attention shows applications that need review.','Updates are known deployable builds detected during an explicit update check.','Pending means health has not been verified yet.','Use Deployment Center for release activity and Health & Readiness for fleet condition.']},
@@ -64,7 +68,9 @@ const apiTimed=async(url,options={},timeoutMs=8000)=>{
 function app(){
   return {
     ready:false, installed:false, user:null, csrf:null, authMode:'login',
-    sidebarOpen:false, helpOpen:false, helpTopic:'dashboard', page:'dashboard', projectTab:'overview', query:'', filter:'all', routeReady:false,
+    sidebarOpen:false, sidebarExpanded:readPreference('digiops.sidebarExpanded','false')==='true',
+    theme:readPreference('digiops.theme','light')==='dark'?'dark':'light', recentAppIds:[],
+    helpOpen:false, helpTopic:'dashboard', page:'dashboard', projectTab:'overview', query:'', filter:'all', routeReady:false,
     projects:[], targets:[], selectedId:null, releases:[], githubInfo:null, candidateBranchChoice:'', fileListing:null, health:null, audit:[],
     detailCache:{github:{},releases:{},health:{},files:{}}, requestPool:{},
     modal:null, busy:false, notice:'', error:'', operationTimer:null,
@@ -82,6 +88,28 @@ function app(){
     targetForm:{id:'',name:'',type:'agent',endpoint:'',secret:'',publicBase:'public_html',privateBase:'private_html'},
     form:{name:'',repo:'',branch:'main',slug:'',artifactName:'digiops-release',healthPath:'/',retention:5,targetId:'local',url:'',publicPath:'',privatePath:''},
 
+    toggleTheme(){
+      this.theme=this.theme==='dark'?'light':'dark'
+      savePreference('digiops.theme',this.theme)
+      icons()
+    },
+    toggleSidebar(){
+      this.sidebarExpanded=!this.sidebarExpanded
+      savePreference('digiops.sidebarExpanded',String(this.sidebarExpanded))
+      icons()
+    },
+    loadRecentApps(){
+      if(!this.user||!this.user.id){this.recentAppIds=[];return}
+      try{
+        const ids=JSON.parse(readPreference('digiops.recent.'+this.user.id,'[]'))
+        this.recentAppIds=Array.isArray(ids)?ids.filter(id=>typeof id==='string').slice(0,12):[]
+      }catch{this.recentAppIds=[]}
+    },
+    rememberApp(id){
+      if(!this.user||!this.user.id)return
+      this.recentAppIds=[id,...this.recentAppIds.filter(value=>value!==id)].slice(0,12)
+      savePreference('digiops.recent.'+this.user.id,JSON.stringify(this.recentAppIds))
+    },
     async init(){
       await this.bootstrap()
       window.addEventListener('popstate',()=>this.applyRoute(window.location.pathname,false))
@@ -97,7 +125,7 @@ function app(){
         this.installed=s.installed
         this.user=s.user
         this.csrf=s.csrf
-        if(this.user){await Promise.all([this.loadProjects(),this.loadTargets(),this.loadRuntimeInfo()])}
+        if(this.user){this.loadRecentApps();await Promise.all([this.loadProjects(),this.loadTargets(),this.loadRuntimeInfo()])}
       }catch(e){this.error=e.message}
       finally{this.ready=true;icons()}
     },
@@ -150,7 +178,7 @@ function app(){
       this.clearMessages();this.busy=true
       try{
         const d=await api('./api/login.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(this.login)})
-        this.user=d.user;this.csrf=d.csrf;this.login.password='';this.notice='Signed in.'
+        this.user=d.user;this.csrf=d.csrf;this.login.password='';this.notice='Signed in.';this.loadRecentApps()
         await Promise.all([this.loadProjects(),this.loadTargets(),this.loadRuntimeInfo()]);await this.applyRoute(window.location.pathname,true);this.resumeDeploymentWatches()
       }catch(e){this.error=e.message}
       finally{this.busy=false;icons()}
@@ -158,7 +186,7 @@ function app(){
     async logout(){
       this.clearMessages()
       try{await api('./api/logout.php',{method:'POST',headers:{'X-CSRF-Token':this.csrf}})}catch{}
-      this.stopDeploymentWatchLoop();this.user=null;this.csrf=null;this.projects=[];this.page='dashboard';history.replaceState({},'',APP_BASE);icons()
+      this.stopDeploymentWatchLoop();this.user=null;this.csrf=null;this.projects=[];this.recentAppIds=[];this.page='dashboard';history.replaceState({},'',APP_BASE);icons()
     },
     async loadProjects(){
       const d=await api('./api/projects.php');this.projects=d.projects||[];icons()
@@ -259,13 +287,15 @@ function app(){
         .sort((a,b)=>new Date(b.lastDeploy)-new Date(a.lastDeploy))
         .slice(0,6)
     },
+    get recentlyUsedProjects(){return this.recentAppIds.map(id=>this.projects.find(p=>p.id===id)).filter(Boolean).slice(0,6)},
     get filteredProjects(){
       const q=this.query.trim().toLowerCase()
+      const recent=new Map(this.recentAppIds.map((id,index)=>[id,index]))
       return this.projects.filter(p=>{
         const m=!q||[p.name,p.repo,p.url,p.branch].some(v=>String(v||'').toLowerCase().includes(q))
         const f=this.filter==='all'||(this.filter==='updates'&&p.update)||(this.filter==='healthy'&&p.health==='healthy')||(this.filter==='attention'&&p.health==='attention')
         return m&&f
-      })
+      }).sort((a,b)=>(recent.get(a.id)??9999)-(recent.get(b.id)??9999)||String(a.name).localeCompare(String(b.name)))
     },
     get selected(){return this.projects.find(p=>p.id===this.selectedId)||null},
     get activeDeploymentWatches(){return this.deploymentWatches.filter(w=>['queued','pending','running','unavailable'].includes(w.status))},
@@ -701,7 +731,9 @@ function app(){
           icons();return
         }
         if(this.selectedId!==project.id)this.candidateBranchChoice=''
+        const changedProject=this.selectedId!==project.id
         this.selectedId=project.id;this.page='project';this.projectTab=tab
+        if(changedProject)this.rememberApp(project.id)
         this.githubInfo=this.cacheGet('github',project.id+'|'+this.candidateBranchChoice,120000)
         this.releases=this.cacheGet('releases',project.id,300000)||[]
         this.health=this.cacheGet('health',project.id,60000)||(project.healthDetail&&typeof project.healthDetail==='object'?project.healthDetail:null)
@@ -1147,7 +1179,7 @@ function app(){
 }
 
 document.querySelector('#app').innerHTML=`
-<div x-data="app" x-init="init()" @keydown.escape.window="modal=null;helpOpen=false;sidebarOpen=false" x-cloak class="shell">
+<div x-data="app" x-init="init()" @keydown.escape.window="modal=null;helpOpen=false;sidebarOpen=false" x-cloak class="shell" :class="theme==='dark'?'theme-dark':'theme-light'">
   <div x-show="!ready" class="grid min-h-screen place-items-center"><div class="text-center"><div class="brand-mark mx-auto"><i data-lucide="zap"></i></div><p class="mt-4 text-sm text-slate-500">Loading DigiOps…</p></div></div>
 
   <div x-show="ready && !user" class="grid min-h-screen place-items-center p-4">
@@ -1173,33 +1205,33 @@ document.querySelector('#app').innerHTML=`
 
   <div x-show="ready && user" class="app-frame flex">
     <div x-show="sidebarOpen" @click="sidebarOpen=false" class="fixed inset-0 z-40 bg-slate-950/20 lg:hidden"></div>
-    <aside class="sidebar" :class="sidebarOpen?'open':''">
+    <aside class="sidebar" :class="(sidebarOpen?'open ':'')+(sidebarExpanded?'sidebar-expanded':'sidebar-compact')">
       <div class="sidebar-brand">
         <div class="brand-mark"><i data-lucide="zap"></i></div>
         <div class="min-w-0"><div class="font-bold text-white">DigiOps</div><div class="text-xs text-slate-400">Deployment Control Plane</div></div>
-        <button @click="sidebarOpen=false" class="ml-auto text-slate-400 hover:text-white lg:hidden"><i data-lucide="x"></i></button>
+        <button @click="toggleSidebar()" class="sidebar-expand-btn hidden lg:grid" :aria-label="sidebarExpanded?'Collapse navigation':'Expand navigation'" :title="sidebarExpanded?'Collapse navigation':'Expand navigation'"><i data-lucide="panel-left" class="h-4 w-4"></i></button><button @click="sidebarOpen=false" class="ml-auto text-slate-400 hover:text-white lg:hidden" aria-label="Close navigation"><i data-lucide="x"></i></button>
       </div>
 
       <nav class="sidebar-nav">
         <div class="sidebar-section">
           <div class="sidebar-label">Operate</div>
-          <button @click="go('dashboard')" class="side-link" :class="page==='dashboard'?'active':''"><i data-lucide="layout-dashboard"></i><span>Command Center</span></button>
-          <button @click="go('projects')" class="side-link" :class="['projects','project'].includes(page)?'active':''"><i data-lucide="folder-git-2"></i><span>Applications</span><span class="nav-badge" x-text="projects.length"></span></button>
-          <button @click="go('deployments')" class="side-link" :class="page==='deployments'?'active':''"><i data-lucide="rocket"></i><span>Deployment Center</span><span x-show="stats.updates" class="nav-badge nav-badge-warn" x-text="stats.updates"></span></button>
-          <button @click="go('verification')" class="side-link" :class="page==='verification'?'active':''"><i data-lucide="shield-check"></i><span>Verification</span><span x-show="verificationStats.active||verificationStats.failed" class="nav-badge" :class="verificationStats.failed?'nav-badge-danger':'nav-badge-warn'" x-text="verificationStats.failed||verificationStats.active"></span></button>
-          <button @click="go('health-center')" class="side-link" :class="page==='health-center'?'active':''"><i data-lucide="heart-pulse"></i><span>Health & Readiness</span><span x-show="stats.attention" class="nav-badge nav-badge-danger" x-text="stats.attention"></span></button>
+          <button @click="go('dashboard')" class="side-link" :class="page==='dashboard'?'active':''"><i data-lucide="layout-dashboard"></i><span class="sidebar-nav-text">Command Center</span></button>
+          <button @click="go('projects')" class="side-link" :class="['projects','project'].includes(page)?'active':''"><i data-lucide="folder-git-2"></i><span class="sidebar-nav-text">Applications</span><span class="nav-badge" x-text="projects.length"></span></button>
+          <button @click="go('deployments')" class="side-link" :class="page==='deployments'?'active':''"><i data-lucide="rocket"></i><span class="sidebar-nav-text">Deployment Center</span><span x-show="stats.updates" class="nav-badge nav-badge-warn" x-text="stats.updates"></span></button>
+          <button @click="go('verification')" class="side-link" :class="page==='verification'?'active':''"><i data-lucide="shield-check"></i><span class="sidebar-nav-text">Verification</span><span x-show="verificationStats.active||verificationStats.failed" class="nav-badge" :class="verificationStats.failed?'nav-badge-danger':'nav-badge-warn'" x-text="verificationStats.failed||verificationStats.active"></span></button>
+          <button @click="go('health-center')" class="side-link" :class="page==='health-center'?'active':''"><i data-lucide="heart-pulse"></i><span class="sidebar-nav-text">Health & Readiness</span><span x-show="stats.attention" class="nav-badge nav-badge-danger" x-text="stats.attention"></span></button>
         </div>
 
         <div class="sidebar-section" x-show="userRole==='admin'">
           <div class="sidebar-label">Infrastructure</div>
-          <button @click="go('targets')" class="side-link" :class="page==='targets'?'active':''"><i data-lucide="server"></i><span>Deployment Targets</span><span class="nav-badge" x-text="targets.length"></span></button>
-          <button @click="go('settings')" class="side-link" :class="page==='settings'?'active':''"><i data-lucide="settings-2"></i><span>Connections & Runtime</span></button>
+          <button @click="go('targets')" class="side-link" :class="page==='targets'?'active':''"><i data-lucide="server"></i><span class="sidebar-nav-text">Deployment Targets</span><span class="nav-badge" x-text="targets.length"></span></button>
+          <button @click="go('settings')" class="side-link" :class="page==='settings'?'active':''"><i data-lucide="settings-2"></i><span class="sidebar-nav-text">Connections & Runtime</span></button>
         </div>
 
         <div class="sidebar-section">
           <div class="sidebar-label">Control</div>
-          <button @click="go('audit')" class="side-link" :class="page==='audit'?'active':''" x-show="userRole==='admin'"><i data-lucide="file-clock"></i><span>Audit & Governance</span></button>
-          <button @click="go('guide')" class="side-link" :class="page==='guide'?'active':''"><i data-lucide="book-open"></i><span>Help & Guide</span></button>
+          <button @click="go('audit')" class="side-link" :class="page==='audit'?'active':''" x-show="userRole==='admin'"><i data-lucide="file-clock"></i><span class="sidebar-nav-text">Audit & Governance</span></button>
+          <button @click="go('guide')" class="side-link" :class="page==='guide'?'active':''"><i data-lucide="book-open"></i><span class="sidebar-nav-text">Help & Guide</span></button>
         </div>
       </nav>
 
@@ -1219,7 +1251,10 @@ document.querySelector('#app').innerHTML=`
           <div class="min-w-0"><div class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400" x-text="pageEyebrow"></div><div class="truncate text-sm font-bold text-slate-900" x-text="pageTitle"></div></div>
         </div>
         <div class="ml-auto flex min-w-0 items-center gap-2">
-          <label class="search-field hidden md:flex"><i data-lucide="search" class="h-4 w-4 text-slate-400"></i><input x-model="query" @keydown.enter="go('projects')" placeholder="Find an application…"></label>
+          <label class="search-field hidden md:flex"><i data-lucide="search" class="h-4 w-4 text-slate-400"></i><input x-model="query" @keydown.enter="go('projects')" placeholder="Search applications…"></label>
+          <button @click="toggleTheme()" class="icon-btn theme-switch" :aria-label="theme==='dark'?'Switch to light theme':'Switch to dark theme'" :title="theme==='dark'?'Switch to light theme':'Switch to dark theme'" :aria-pressed="theme==='dark'">
+            <span x-show="theme==='light'"><i data-lucide="moon" class="h-4 w-4"></i></span><span x-show="theme==='dark'"><i data-lucide="sun" class="h-4 w-4"></i></span>
+          </button>
           <button x-show="backgroundDeploymentCount" @click="go('verification')" class="hidden items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 sm:inline-flex"><i data-lucide="refresh-cw" class="h-3.5 w-3.5 animate-spin"></i><span x-text="backgroundDeploymentCount+' verifying'"></span></button>
           <button @click="openHelp()" class="icon-btn" title="Explain this page"><i data-lucide="circle-help" class="h-4 w-4"></i></button>
           <span class="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 xl:inline-flex"><span class="status-dot" :class="runtimeInfo&&runtimeInfo.identityVerified?'bg-emerald-500':'bg-amber-500'"></span><span x-text="runtimeInfo&&runtimeInfo.identityVerified?'Verified build':'Build check needed'"></span></span>
@@ -1266,6 +1301,12 @@ document.querySelector('#app').innerHTML=`
               <button @click="go('targets')" class="hero-metric" x-show="userRole==='admin'"><span>Targets</span><b x-text="stats.targets"></b></button>
             </div>
           </div>
+          <div x-show="recentlyUsedProjects.length>0" class="premium-feature">
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 class="text-lg font-semibold">Recently used applications</h2><p class="mt-1 text-xs text-slate-600">Resume your work without browsing the full registry.</p></div><button @click="go('projects')" class="btn">All applications</button></div>
+            <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              <template x-for="p in recentlyUsedProjects" :key="p.id"><button @click="openProject(p.id)" class="shortcut-tile"><span class="shortcut-icon"><i data-lucide="app-window" class="h-4 w-4"></i></span><span class="min-w-0 flex-1 text-left"><b class="block truncate text-sm" x-text="p.name"></b><small class="block truncate text-xs text-slate-500" x-text="p.repo"></small></span><span aria-hidden="true">↗</span></button></template>
+            </div>
+          </div>
           <div class="quick-actions">
             <button @click="openCreate()" class="quick-action"><span class="quick-icon"><i data-lucide="plus"></i></span><span><b>Add application</b><small>Register a repository and deployment path.</small></span></button>
             <button @click="go('deployments')" class="quick-action"><span class="quick-icon"><i data-lucide="rocket"></i></span><span><b>Review deployments</b><small>See recent releases and deployable updates.</small></span></button>
@@ -1304,6 +1345,11 @@ document.querySelector('#app').innerHTML=`
         <section x-show="page==='projects'">
           <div class="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p class="text-sm font-medium text-blue-600">Application registry</p><h1 class="mt-1 text-2xl font-bold">Applications</h1><p class="muted mt-1">Independent GitHub projects with isolated Cloudways paths.</p></div><button @click="openCreate()" class="btn btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>Create application</button></div>
           <div class="mb-5 flex flex-wrap gap-2 border-b border-slate-200 pb-4"><button @click="filter='all'" class="pill" :class="filter==='all'?'border-blue-200 bg-blue-50 text-blue-700':''">All <span x-text="stats.total"></span></button><button @click="filter='updates'" class="pill">Updates <span x-text="stats.updates"></span></button><button @click="filter='healthy'" class="pill">Healthy <span x-text="stats.healthy"></span></button><button @click="filter='attention'" class="pill">Attention <span x-text="stats.attention"></span></button></div>
+          <div x-show="recentlyUsedProjects.length>0" class="registry-shortcuts mb-5">
+            <h2 class="mb-1 font-semibold">Recently used</h2><p class="mb-4 text-xs text-slate-600">Your six most recently opened applications on this device.</p>
+            <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3"><template x-for="p in recentlyUsedProjects" :key="p.id"><button @click="openProject(p.id)" class="shortcut-tile"><span class="shortcut-icon"><i data-lucide="app-window" class="h-4 w-4"></i></span><span class="min-w-0 flex-1 truncate text-left text-sm font-semibold" x-text="p.name"></span><span aria-hidden="true">↗</span></button></template></div>
+          </div>
+          <h2 class="mb-3 text-sm font-semibold">All applications</h2>
           <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"><template x-for="p in filteredProjects" :key="p.id"><button @click="openProject(p.id)" class="project-card"><div class="flex items-start justify-between"><div class="flex min-w-0 items-center gap-3"><span class="grid h-11 w-11 place-items-center rounded-2xl bg-blue-50 text-blue-700"><i data-lucide="folder-git-2"></i></span><span class="min-w-0"><b class="block truncate" x-text="p.name"></b><small class="block truncate text-slate-500" x-text="p.repo"></small></span></div><i data-lucide="more-vertical" class="h-5 w-5 text-slate-400"></i></div><div class="mt-5 flex flex-wrap gap-2"><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="p.branch"></span></span><span class="pill"><i data-lucide="server" class="h-3.5 w-3.5"></i><span x-text="targetName(p.targetId||'local')"></span></span><span class="pill" :title="healthFreshness(p)"><span class="status-dot" :class="p.health==='healthy'?'bg-emerald-500':p.health==='attention'?'bg-rose-500':'bg-amber-500'"></span><span x-text="p.health"></span></span><span x-show="p.update" class="pill border-amber-200 bg-amber-50 text-amber-700">Update available</span></div><div class="mt-auto grid grid-cols-2 gap-3 pt-6 text-xs"><div><span class="text-slate-400">URL</span><b class="mt-1 block" x-text="p.url"></b></div><div><span class="text-slate-400">Release</span><b class="mt-1 block truncate" x-text="p.release"></b></div></div></button></template></div>
         </section>
 
