@@ -29,34 +29,103 @@ final class ProjectRegistry
         return null;
     }
 
+    // Legacy callers may still register with upsert; never overwrite live runtime state.
     public function upsert(array $input): array
+    {
+        return $this->create($input);
+    }
+
+    public function create(array $input): array
     {
         $record = $this->normalize($input);
         $this->validateRecord($record);
 
-        Files::withLock($this->file . '.lock', function() use ($record): void {
+        return Files::withLock($this->file . '.lock', function() use ($record): array {
             $all = $this->allUnlocked();
-            $found = false;
-            foreach ($all as $i => $project) {
+            foreach ($all as $project) {
                 if ($project['id'] === $record['id']) {
-                    $all[$i] = array_merge($project, $record);
-                    $found = true;
-                    break;
+                    throw new RuntimeException('PROJECT_ALREADY_EXISTS');
                 }
             }
-            if (!$found) $all[] = $record;
+            $all[] = $record;
             Files::writeJson($this->file, $all);
+            return $record;
         });
-
-        return $record;
     }
 
+    public function updateConfig(string $id, array $changes): array
+    {
+        $id = PathGuard::slug($id);
+        // The immutable ID determines managed paths. Runtime/deployment metadata
+        // must never be accepted from a configuration-edit request.
+        $allowed = [
+            'name', 'repo', 'branch', 'artifactName', 'healthPath', 'retention',
+            'targetId', 'url', 'publicPath', 'privatePath',
+        ];
+        foreach (array_keys($changes) as $key) {
+            if (!in_array($key, $allowed, true) && $key !== 'id') {
+                throw new InvalidArgumentException('PROJECT_FIELD_NOT_EDITABLE');
+            }
+        }
+        if (isset($changes['id']) && PathGuard::slug((string)$changes['id']) !== $id) {
+            throw new InvalidArgumentException('PROJECT_ID_IMMUTABLE');
+        }
+        unset($changes['id']);
+
+        return Files::withLock($this->file . '.lock', function() use ($id, $changes): array {
+            $all = $this->allUnlocked();
+            foreach ($all as $i => $project) {
+                if ($project['id'] !== $id) continue;
+
+                // Relocating an already deployed application could orphan live files,
+                // releases, health checks or rollback state.
+                if (($project['release'] ?? 'Not deployed') !== 'Not deployed') {
+                    foreach (['targetId','url','publicPath','privatePath'] as $field) {
+                        if (array_key_exists($field, $changes) && (string)$changes[$field] !== (string)$project[$field]) {
+                            throw new RuntimeException('DEPLOYED_PROJECT_TARGET_IMMUTABLE');
+                        }
+                    }
+                }
+                $updated = $this->normalize(array_merge($project, $changes));
+                $this->validateRecord($updated);
+                if ($updated['repo'] !== $project['repo'] || $updated['branch'] !== $project['branch'] ||
+                    $updated['artifactName'] !== $project['artifactName']) {
+                    $updated['update'] = false; // Candidate must be checked again.
+                }
+                $all[$i] = $updated;
+                Files::writeJson($this->file, $all);
+                return $updated;
+            }
+            throw new RuntimeException('PROJECT_NOT_FOUND');
+        });
+    }
+
+    public function setSuspended(string $id, bool $suspended): array
+    {
+        $id = PathGuard::slug($id);
+        return Files::withLock($this->file . '.lock', function() use ($id, $suspended): array {
+            $all = $this->allUnlocked();
+            foreach ($all as $i => $project) {
+                if ($project['id'] !== $id) continue;
+                $project['suspended'] = $suspended;
+                $project['suspendedAt'] = $suspended ? date(DATE_ATOM) : null;
+                $all[$i] = $project;
+                Files::writeJson($this->file, $all);
+                return $project;
+            }
+            throw new RuntimeException('PROJECT_NOT_FOUND');
+        });
+    }
+
+    // Registry removal deliberately never deletes hosted public/private files.
     public function delete(string $id): void
     {
         $id = PathGuard::slug($id);
         Files::withLock($this->file . '.lock', function() use ($id): void {
-            $all = array_values(array_filter($this->allUnlocked(), fn(array $p): bool => $p['id'] !== $id));
-            Files::writeJson($this->file, $all);
+            $all = $this->allUnlocked();
+            $remaining = array_values(array_filter($all, fn(array $p): bool => $p['id'] !== $id));
+            if (count($remaining) === count($all)) throw new RuntimeException('PROJECT_NOT_FOUND');
+            Files::writeJson($this->file, $remaining);
         });
     }
 
@@ -134,6 +203,17 @@ final class ProjectRegistry
         ];
     }
 
+    private function normalizeRepository(string $id, string $repository): string
+    {
+        $repository = trim($repository);
+        // Migration for the known LexiconSchoolGroup owner typo. This is applied
+        // on read and persisted on the next registry write; no GitHub rename.
+        if ($id === 'lexiconschoolgroup' && $repository === 'ndigiti/Lexicon-SC-26') {
+            return 'indigiti/Lexicon-SC-26';
+        }
+        return $repository;
+    }
+
     private function normalize(array $project): array
     {
         $slug = PathGuard::slug((string)($project['id'] ?? $project['slug'] ?? ''));
@@ -157,7 +237,7 @@ final class ProjectRegistry
         return [
             'id' => $slug,
             'name' => trim((string)($project['name'] ?? $slug)) ?: $slug,
-            'repo' => trim((string)($project['repo'] ?? '')),
+            'repo' => $this->normalizeRepository($slug, (string)($project['repo'] ?? '')),
             'branch' => trim((string)($project['branch'] ?? 'main')) ?: 'main',
             'url' => $url,
             'publicPath' => $publicPath,
@@ -172,6 +252,8 @@ final class ProjectRegistry
             'lastDeploy' => (string)($project['lastDeploy'] ?? 'Never'),
             'stack' => array_values(array_filter((array)($project['stack'] ?? ['Auto-detect']), 'is_string')),
             'environment' => (string)($project['environment'] ?? 'Stage'),
+            'suspended' => (bool)($project['suspended'] ?? false),
+            'suspendedAt' => ($project['suspended'] ?? false) ? (string)($project['suspendedAt'] ?? '') : null,
             'targetId' => $targetId,
             'artifactName' => trim((string)($project['artifactName'] ?? 'digiops-release')),
             'healthPath' => trim((string)($project['healthPath'] ?? '/')),
