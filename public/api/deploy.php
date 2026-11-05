@@ -38,6 +38,7 @@ try {
     $projectId=(string)($data['project']??'');
     $project=(new ProjectRegistry())->find($projectId);
     if (!$project) throw new RuntimeException('PROJECT_NOT_FOUND');
+    if (!empty($project['suspended'])) throw new RuntimeException('PROJECT_SUSPENDED');
     $candidateBranch=DeploymentCandidateSelector::candidateBranch($project,(string)($data['candidateBranch']??''));
 
     $runId=(int)($data['runId']??0);
