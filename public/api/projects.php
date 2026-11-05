@@ -33,6 +33,9 @@ try {
         $id = (string)($data['id'] ?? '');
         $existing = $registry->find($id);
         if (!$existing) JsonResponse::send(['error' => 'PROJECT_NOT_FOUND'], 404);
+        foreach ((new DeploymentJobRepository())->active($id) as $job) {
+            JsonResponse::send(['error' => 'DEPLOYMENT_ALREADY_ACTIVE', 'requestId' => $job['requestId'] ?? ''], 409);
+        }
         $project = $registry->updateConfig($id, $data);
         (new AuditLog())->write('PROJECT_CONFIG_UPDATED', [
             'project' => $id,
