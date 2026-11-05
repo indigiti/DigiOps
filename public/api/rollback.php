@@ -20,6 +20,7 @@ try {
     $release=(string)($data['release']??'');
     $project=(new ProjectRegistry())->find($projectId);
     if(!$project) throw new RuntimeException('PROJECT_NOT_FOUND');
+    if (!empty($project['suspended'])) throw new RuntimeException('PROJECT_SUSPENDED');
     $target=(new TargetService())->forProject($projectId);
     if(($target['id']??'local')==='local'){
         JsonResponse::send((new ReleaseManager())->rollback($projectId,$release,$user));
