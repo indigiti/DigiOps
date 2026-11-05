@@ -1,10 +1,10 @@
 import Alpine from '@alpinejs/csp'
-import { createIcons, Activity, AppWindow, ArrowLeft, BookOpen, Boxes, CheckCircle2, ChevronDown, CircleGauge, CircleHelp, Cloud, FileClock, FileText, FolderGit2, GitBranch, Github, Globe2, HardDrive, HeartPulse, History, LayoutDashboard, ListFilter, LockKeyhole, LogOut, Menu, Moon, MoreVertical, PackageCheck, PanelLeft, Plus, RefreshCw, Rocket, Search, Server, Settings2, ShieldCheck, Sun, UserRound, X, Zap } from 'lucide'
+import { createIcons, Activity, AppWindow, ArrowLeft, BookOpen, Boxes, CheckCircle2, ChevronDown, CircleGauge, CircleHelp, Cloud, ExternalLink, FileClock, FileText, FolderGit2, GitBranch, Github, Globe2, HardDrive, HeartPulse, History, LayoutDashboard, ListFilter, LockKeyhole, LogOut, Menu, Moon, MoreVertical, PackageCheck, PanelLeft, Plus, RefreshCw, Rocket, Search, Server, Settings2, ShieldCheck, Sun, UserRound, X, Zap } from 'lucide'
 import './styles.css'
 import './premium-theme.css'
 
 window.Alpine = Alpine
-const ICONS={Activity,AppWindow,ArrowLeft,BookOpen,Boxes,CheckCircle2,ChevronDown,CircleGauge,CircleHelp,Cloud,FileClock,FileText,FolderGit2,GitBranch,Github,Globe2,HardDrive,HeartPulse,History,LayoutDashboard,ListFilter,LockKeyhole,LogOut,Menu,Moon,MoreVertical,PackageCheck,PanelLeft,Plus,RefreshCw,Rocket,Search,Server,Settings2,ShieldCheck,Sun,UserRound,X,Zap}
+const ICONS={Activity,AppWindow,ArrowLeft,BookOpen,Boxes,CheckCircle2,ChevronDown,CircleGauge,CircleHelp,Cloud,ExternalLink,FileClock,FileText,FolderGit2,GitBranch,Github,Globe2,HardDrive,HeartPulse,History,LayoutDashboard,ListFilter,LockKeyhole,LogOut,Menu,Moon,MoreVertical,PackageCheck,PanelLeft,Plus,RefreshCw,Rocket,Search,Server,Settings2,ShieldCheck,Sun,UserRound,X,Zap}
 const icons=()=>queueMicrotask(()=>createIcons({icons:ICONS}))
 const APP_BASE=(import.meta.env.BASE_URL||'/digiops/').replace(/\/+$/,'')+'/'
 const appUrl=(path='')=>APP_BASE+String(path||'').replace(/^\/+/,'')
@@ -319,6 +319,18 @@ function app(){
     get selectedIsStage(){return !!this.selected && ['stage','staging'].includes(String(this.selected.environment||'').toLowerCase())},
     get candidateSelectionBranch(){return this.candidateBranchChoice.trim()||this.selectedBranch},
     get selectedUrl(){return this.selected ? this.selected.url : ''},
+    // Local applications use the current hosting origin; remote targets supply
+    // their own HTTPS URL. Never expose non-web or credentialed schemes in links.
+    get selectedWebsiteUrl(){
+      const configured=String(this.selectedUrl||'').trim()
+      if(!configured)return ''
+      try{
+        const target=new URL(configured,window.location.origin)
+        if(target.username || target.password)return ''
+        if(target.protocol!=='https:' && (target.protocol!=='http:' || target.origin!==window.location.origin))return ''
+        return target.href
+      }catch{return ''}
+    },
     get selectedPublicPath(){return this.selected ? this.selected.publicPath : ''},
     get selectedPrivatePath(){return this.selected ? this.selected.privatePath : ''},
     get selectedCommit(){return this.selected ? this.selected.commit : ''},
@@ -1412,7 +1424,7 @@ document.querySelector('#app').innerHTML=`
         </section>
 
         <section x-show="page==='project' && selected">
-          <div class="mb-5 flex flex-wrap items-center gap-3"><button @click="go('projects')" class="icon-btn"><i data-lucide="arrow-left"></i></button><div><h1 class="text-xl font-bold" x-text="selectedName"></h1><p class="text-sm text-slate-500" x-text="selectedRepo"></p></div><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="selectedBranch"></span></span><span x-show="selected && selected.suspended" class="pill border-amber-200 bg-amber-50 text-amber-700">Suspended</span><span class="pill"><i data-lucide="server" class="h-3.5 w-3.5"></i><span x-text="targetName(selectedTargetId)"></span></span><div class="ml-auto flex gap-2"><button @click="checkUpdate()" class="btn" :disabled="busy"><i data-lucide="refresh-cw" class="h-4 w-4" :class="checkingUpdate?'animate-spin':''"></i><span x-text="checkingUpdate?'Checking…':'Check update'"></span></button><button x-show="githubNeedsConnection" @click="go('settings')" class="btn"><i data-lucide="github" class="h-4 w-4"></i>Connect GitHub</button><button @click="deploy()" class="btn btn-primary" :disabled="busy || !canManageApps || (selected && selected.suspended) || !githubConnected || selectedDeploymentWatch"><i data-lucide="rocket" class="h-4 w-4"></i><span x-text="selectedDeploymentWatch?'Verifying…':deploying?'Deploying…':'Deploy'"></span></button></div></div>
+          <div class="mb-5 flex flex-wrap items-center gap-3"><button @click="go('projects')" class="icon-btn"><i data-lucide="arrow-left"></i></button><div><h1 class="text-xl font-bold" x-text="selectedName"></h1><p class="text-sm text-slate-500" x-text="selectedRepo"></p></div><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="selectedBranch"></span></span><span x-show="selected && selected.suspended" class="pill border-amber-200 bg-amber-50 text-amber-700">Suspended</span><span class="pill"><i data-lucide="server" class="h-3.5 w-3.5"></i><span x-text="targetName(selectedTargetId)"></span></span><a x-show="selectedWebsiteUrl" :href="selectedWebsiteUrl" :title="selectedWebsiteUrl" target="_blank" rel="noopener noreferrer" aria-label="Open application website in a new tab" class="btn"><i data-lucide="external-link" class="h-4 w-4"></i><span>Open website</span></a><div class="ml-auto flex gap-2"><button @click="checkUpdate()" class="btn" :disabled="busy"><i data-lucide="refresh-cw" class="h-4 w-4" :class="checkingUpdate?'animate-spin':''"></i><span x-text="checkingUpdate?'Checking…':'Check update'"></span></button><button x-show="githubNeedsConnection" @click="go('settings')" class="btn"><i data-lucide="github" class="h-4 w-4"></i>Connect GitHub</button><button @click="deploy()" class="btn btn-primary" :disabled="busy || !canManageApps || (selected && selected.suspended) || !githubConnected || selectedDeploymentWatch"><i data-lucide="rocket" class="h-4 w-4"></i><span x-text="selectedDeploymentWatch?'Verifying…':deploying?'Deploying…':'Deploy'"></span></button></div></div>
           <div class="mb-5 flex gap-6 overflow-x-auto border-b border-slate-200"><template x-for="t in ['overview','deploy','releases','files','health','settings']"><button @click="setTab(t)" class="tab capitalize" :class="projectTab===t?'active':''" x-text="t"></button></template></div>
           <div x-show="projectTab==='overview'" class="grid gap-5 xl:grid-cols-[1.4fr_.8fr]">
             <div class="panel"><h2 class="font-bold">Deployment configuration</h2><div class="row"><span><b class="block text-sm">Public URL</b><small class="text-slate-500">Browser route</small></span><code x-text="selectedUrl"></code></div><div class="row"><span><b class="block text-sm">Public folder</b><small class="text-slate-500">Release payload only</small></span><code class="text-xs" x-text="selectedPublicPath"></code></div><div class="row"><span><b class="block text-sm">Private folder</b><small class="text-slate-500">Runtime and metadata</small></span><code class="text-xs" x-text="selectedPrivatePath"></code></div><div class="row"><span><b class="block text-sm">Current commit</b></span><code x-text="selectedCommit"></code></div></div>
