@@ -73,7 +73,7 @@ function app(){
     helpOpen:false, helpTopic:'dashboard', page:'dashboard', projectTab:'overview', query:'', filter:'all', routeReady:false,
     projects:[], targets:[], selectedId:null, releases:[], githubInfo:null, candidateBranchChoice:'', fileListing:null, health:null, audit:[],
     detailCache:{github:{},releases:{},health:{},files:{}}, requestPool:{},
-    modal:null, busy:false, notice:'', error:'', operationTimer:null,
+    modal:null, editProjectId:null, busy:false, notice:'', error:'', operationTimer:null,
     deploymentWatches:[], deploymentJobs:[], verificationJobId:null, deploymentWatchTimer:null, deploymentWatchBusy:false,
     operation:{active:false,type:'',title:'',message:'',percent:0,status:'idle',estimated:false},
     login:{username:'',password:'',totp:''},
@@ -298,6 +298,8 @@ function app(){
       }).sort((a,b)=>(recent.get(a.id)??9999)-(recent.get(b.id)??9999)||String(a.name).localeCompare(String(b.name)))
     },
     get selected(){return this.projects.find(p=>p.id===this.selectedId)||null},
+    get canManageApps(){return ['admin','operator'].includes(this.userRole)},
+    get isAdmin(){return this.userRole==='admin'},
     get activeDeploymentWatches(){return this.deploymentWatches.filter(w=>['queued','pending','running','unavailable'].includes(w.status))},
     get selectedDeploymentWatch(){return this.selected?this.activeDeploymentWatches.find(w=>w.projectId===this.selected.id)||null:null},
     get backgroundDeploymentCount(){return this.activeDeploymentWatches.length},
@@ -777,10 +779,54 @@ function app(){
       queueMicrotask(()=>this.updatePathPreview())
     },
     openCreate(){
+      if(!this.canManageApps)return
+      this.editProjectId=null
       Object.assign(this.form,{name:'',repo:'',branch:'main',slug:'',artifactName:'digiops-release',healthPath:'/',retention:5,targetId:'local',url:'',publicPath:'',privatePath:''})
       this.modal='create'
       queueMicrotask(()=>this.updatePathPreview())
       icons()
+    },
+    openEdit(project=this.selected){
+      if(!project || !this.canManageApps)return
+      this.editProjectId=project.id
+      Object.assign(this.form,{
+        name:project.name,repo:project.repo,branch:project.branch,slug:project.id,
+        artifactName:project.artifactName,healthPath:project.healthPath,
+        retention:project.retention,targetId:project.targetId||'local',
+        url:project.url,publicPath:project.publicPath,privatePath:project.privatePath
+      })
+      this.modal='create'
+      queueMicrotask(()=>this.updatePathPreview())
+      icons()
+    },
+    async setProjectSuspended(suspended){
+      const p=this.selected
+      if(!p || !this.isAdmin || this.busy)return
+      const verb=suspended?'Suspend':'Reactivate'
+      if(!confirm(verb+' DigiOps management for '+p.name+'? The public website will remain online.'))return
+      this.clearMessages();this.busy=true
+      try{
+        await api('./api/projects.php',{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({id:p.id,suspended})})
+        this.cacheDropProject(p.id)
+        await this.loadProjects()
+        this.notice=suspended?'Application suspended from DigiOps deployments. Hosted site remains online.':'Application management reactivated.'
+      }catch(e){this.error=e.message}
+      finally{this.busy=false;icons()}
+    },
+    async removeProject(){
+      const p=this.selected
+      if(!p || !this.isAdmin || !p.suspended || this.busy)return
+      const confirmation=prompt('Remove '+p.name+' from the DigiOps registry? Hosted files are NOT deleted. Type the application ID '+p.id+' to confirm.')
+      if(confirmation!==p.id)return
+      this.clearMessages();this.busy=true
+      try{
+        await api('./api/projects.php',{method:'DELETE',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify({id:p.id,confirmation})})
+        this.cacheDropProject(p.id)
+        await this.loadProjects()
+        this.notice='Application removed from registry. Hosted files were preserved.'
+        await this.go('projects')
+      }catch(e){this.error=e.message}
+      finally{this.busy=false;icons()}
     },
     async saveProject(){
       this.clearMessages()
@@ -804,8 +850,20 @@ function app(){
           payload.publicPath=this.form.publicPath.trim()||('public_html/'+this.form.slug+'/')
           payload.privatePath=this.form.privatePath.trim()||('private_html/'+this.form.slug+'/')
         }
-        await api('./api/projects.php',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify(payload)})
-        this.modal=null;await this.loadProjects();this.notice='Application registered.'
+        const editing=!!this.editProjectId
+        if(editing){
+          // Immutable ID and deployment path. Supply only explicitly editable fields.
+          delete payload.targetId
+          payload.id=this.editProjectId
+          if(this.selected && this.selected.targetId!=='local'){
+            payload.url=this.form.url.trim()
+            payload.publicPath=this.form.publicPath.trim()
+            payload.privatePath=this.form.privatePath.trim()
+          }
+        }
+        await api('./api/projects.php',{method:editing?'PUT':'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf},body:JSON.stringify(payload)})
+        if(editing)this.cacheDropProject(this.editProjectId)
+        this.modal=null;this.editProjectId=null;await this.loadProjects();this.notice=editing?'Application configuration updated. Check update before deploying.':'Application registered.'
       }catch(e){this.error=e.message}
       finally{this.busy=false;icons()}
     },
@@ -1308,7 +1366,7 @@ document.querySelector('#app').innerHTML=`
             </div>
           </div>
           <div class="quick-actions">
-            <button @click="openCreate()" class="quick-action"><span class="quick-icon"><i data-lucide="plus"></i></span><span><b>Add application</b><small>Register a repository and deployment path.</small></span></button>
+            <button x-show="canManageApps" @click="openCreate()" class="quick-action"><span class="quick-icon"><i data-lucide="plus"></i></span><span><b>Add application</b><small>Register a repository and deployment path.</small></span></button>
             <button @click="go('deployments')" class="quick-action"><span class="quick-icon"><i data-lucide="rocket"></i></span><span><b>Review deployments</b><small>See recent releases and deployable updates.</small></span></button>
             <button @click="go('verification')" class="quick-action"><span class="quick-icon"><i data-lucide="shield-check"></i></span><span><b>Inspect verification</b><small>See each deployment checkpoint and exact failures.</small></span></button>
             <button @click="go('health-center')" class="quick-action"><span class="quick-icon"><i data-lucide="heart-pulse"></i></span><span><b>Check readiness</b><small>Review last-known application and target state.</small></span></button>
@@ -1343,18 +1401,18 @@ document.querySelector('#app').innerHTML=`
         </section>
 
         <section x-show="page==='projects'">
-          <div class="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p class="text-sm font-medium text-blue-600">Application registry</p><h1 class="mt-1 text-2xl font-bold">Applications</h1><p class="muted mt-1">Independent GitHub projects with isolated Cloudways paths.</p></div><button @click="openCreate()" class="btn btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>Create application</button></div>
+          <div class="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p class="text-sm font-medium text-blue-600">Application registry</p><h1 class="mt-1 text-2xl font-bold">Applications</h1><p class="muted mt-1">Independent GitHub projects with isolated Cloudways paths.</p></div><button x-show="canManageApps" @click="openCreate()" class="btn btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>Create application</button></div>
           <div class="mb-5 flex flex-wrap gap-2 border-b border-slate-200 pb-4"><button @click="filter='all'" class="pill" :class="filter==='all'?'border-blue-200 bg-blue-50 text-blue-700':''">All <span x-text="stats.total"></span></button><button @click="filter='updates'" class="pill">Updates <span x-text="stats.updates"></span></button><button @click="filter='healthy'" class="pill">Healthy <span x-text="stats.healthy"></span></button><button @click="filter='attention'" class="pill">Attention <span x-text="stats.attention"></span></button></div>
           <div x-show="recentlyUsedProjects.length>0" class="registry-shortcuts mb-5">
             <h2 class="mb-1 font-semibold">Recently used</h2><p class="mb-4 text-xs text-slate-600">Your six most recently opened applications on this device.</p>
             <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3"><template x-for="p in recentlyUsedProjects" :key="p.id"><button @click="openProject(p.id)" class="shortcut-tile"><span class="shortcut-icon"><i data-lucide="app-window" class="h-4 w-4"></i></span><span class="min-w-0 flex-1 truncate text-left text-sm font-semibold" x-text="p.name"></span><span aria-hidden="true">↗</span></button></template></div>
           </div>
           <h2 class="mb-3 text-sm font-semibold">All applications</h2>
-          <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"><template x-for="p in filteredProjects" :key="p.id"><button @click="openProject(p.id)" class="project-card"><div class="flex items-start justify-between"><div class="flex min-w-0 items-center gap-3"><span class="grid h-11 w-11 place-items-center rounded-2xl bg-blue-50 text-blue-700"><i data-lucide="folder-git-2"></i></span><span class="min-w-0"><b class="block truncate" x-text="p.name"></b><small class="block truncate text-slate-500" x-text="p.repo"></small></span></div><i data-lucide="more-vertical" class="h-5 w-5 text-slate-400"></i></div><div class="mt-5 flex flex-wrap gap-2"><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="p.branch"></span></span><span class="pill"><i data-lucide="server" class="h-3.5 w-3.5"></i><span x-text="targetName(p.targetId||'local')"></span></span><span class="pill" :title="healthFreshness(p)"><span class="status-dot" :class="p.health==='healthy'?'bg-emerald-500':p.health==='attention'?'bg-rose-500':'bg-amber-500'"></span><span x-text="p.health"></span></span><span x-show="p.update" class="pill border-amber-200 bg-amber-50 text-amber-700">Update available</span></div><div class="mt-auto grid grid-cols-2 gap-3 pt-6 text-xs"><div><span class="text-slate-400">URL</span><b class="mt-1 block" x-text="p.url"></b></div><div><span class="text-slate-400">Release</span><b class="mt-1 block truncate" x-text="p.release"></b></div></div></button></template></div>
+          <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"><template x-for="p in filteredProjects" :key="p.id"><button @click="openProject(p.id)" class="project-card"><div class="flex items-start justify-between"><div class="flex min-w-0 items-center gap-3"><span class="grid h-11 w-11 place-items-center rounded-2xl bg-blue-50 text-blue-700"><i data-lucide="folder-git-2"></i></span><span class="min-w-0"><b class="block truncate" x-text="p.name"></b><small class="block truncate text-slate-500" x-text="p.repo"></small></span></div><i data-lucide="more-vertical" class="h-5 w-5 text-slate-400"></i></div><div class="mt-5 flex flex-wrap gap-2"><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="p.branch"></span></span><span class="pill"><i data-lucide="server" class="h-3.5 w-3.5"></i><span x-text="targetName(p.targetId||'local')"></span></span><span class="pill" :title="healthFreshness(p)"><span class="status-dot" :class="p.health==='healthy'?'bg-emerald-500':p.health==='attention'?'bg-rose-500':'bg-amber-500'"></span><span x-text="p.health"></span></span><span x-show="p.update" class="pill border-amber-200 bg-amber-50 text-amber-700">Update available</span><span x-show="p.suspended" class="pill border-amber-200 bg-amber-50 text-amber-700">Suspended</span></div><div class="mt-auto grid grid-cols-2 gap-3 pt-6 text-xs"><div><span class="text-slate-400">URL</span><b class="mt-1 block" x-text="p.url"></b></div><div><span class="text-slate-400">Release</span><b class="mt-1 block truncate" x-text="p.release"></b></div></div></button></template></div>
         </section>
 
         <section x-show="page==='project' && selected">
-          <div class="mb-5 flex flex-wrap items-center gap-3"><button @click="go('projects')" class="icon-btn"><i data-lucide="arrow-left"></i></button><div><h1 class="text-xl font-bold" x-text="selectedName"></h1><p class="text-sm text-slate-500" x-text="selectedRepo"></p></div><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="selectedBranch"></span></span><span class="pill"><i data-lucide="server" class="h-3.5 w-3.5"></i><span x-text="targetName(selectedTargetId)"></span></span><div class="ml-auto flex gap-2"><button @click="checkUpdate()" class="btn" :disabled="busy"><i data-lucide="refresh-cw" class="h-4 w-4" :class="checkingUpdate?'animate-spin':''"></i><span x-text="checkingUpdate?'Checking…':'Check update'"></span></button><button x-show="githubNeedsConnection" @click="go('settings')" class="btn"><i data-lucide="github" class="h-4 w-4"></i>Connect GitHub</button><button @click="deploy()" class="btn btn-primary" :disabled="busy || !githubConnected || selectedDeploymentWatch"><i data-lucide="rocket" class="h-4 w-4"></i><span x-text="selectedDeploymentWatch?'Verifying…':deploying?'Deploying…':'Deploy'"></span></button></div></div>
+          <div class="mb-5 flex flex-wrap items-center gap-3"><button @click="go('projects')" class="icon-btn"><i data-lucide="arrow-left"></i></button><div><h1 class="text-xl font-bold" x-text="selectedName"></h1><p class="text-sm text-slate-500" x-text="selectedRepo"></p></div><span class="pill"><i data-lucide="git-branch" class="h-3.5 w-3.5"></i><span x-text="selectedBranch"></span></span><span x-show="selected && selected.suspended" class="pill border-amber-200 bg-amber-50 text-amber-700">Suspended</span><span class="pill"><i data-lucide="server" class="h-3.5 w-3.5"></i><span x-text="targetName(selectedTargetId)"></span></span><div class="ml-auto flex gap-2"><button @click="checkUpdate()" class="btn" :disabled="busy"><i data-lucide="refresh-cw" class="h-4 w-4" :class="checkingUpdate?'animate-spin':''"></i><span x-text="checkingUpdate?'Checking…':'Check update'"></span></button><button x-show="githubNeedsConnection" @click="go('settings')" class="btn"><i data-lucide="github" class="h-4 w-4"></i>Connect GitHub</button><button @click="deploy()" class="btn btn-primary" :disabled="busy || !canManageApps || (selected && selected.suspended) || !githubConnected || selectedDeploymentWatch"><i data-lucide="rocket" class="h-4 w-4"></i><span x-text="selectedDeploymentWatch?'Verifying…':deploying?'Deploying…':'Deploy'"></span></button></div></div>
           <div class="mb-5 flex gap-6 overflow-x-auto border-b border-slate-200"><template x-for="t in ['overview','deploy','releases','files','health','settings']"><button @click="setTab(t)" class="tab capitalize" :class="projectTab===t?'active':''" x-text="t"></button></template></div>
           <div x-show="projectTab==='overview'" class="grid gap-5 xl:grid-cols-[1.4fr_.8fr]">
             <div class="panel"><h2 class="font-bold">Deployment configuration</h2><div class="row"><span><b class="block text-sm">Public URL</b><small class="text-slate-500">Browser route</small></span><code x-text="selectedUrl"></code></div><div class="row"><span><b class="block text-sm">Public folder</b><small class="text-slate-500">Release payload only</small></span><code class="text-xs" x-text="selectedPublicPath"></code></div><div class="row"><span><b class="block text-sm">Private folder</b><small class="text-slate-500">Runtime and metadata</small></span><code class="text-xs" x-text="selectedPrivatePath"></code></div><div class="row"><span><b class="block text-sm">Current commit</b></span><code x-text="selectedCommit"></code></div></div>
@@ -1510,7 +1568,13 @@ document.querySelector('#app').innerHTML=`
               <div class="stat-card"><i data-lucide="server" class="h-5 w-5 text-violet-600"></i><h3 class="mt-3 font-bold">Runtime</h3><p class="muted mt-1" x-text="healthRuntimeText"></p></div>
             </div>
           </div>
-          <div x-show="projectTab==='settings'" class="panel"><h2 class="font-bold">Application settings</h2><div class="mt-5 grid gap-4 md:grid-cols-2"><div><span class="muted">Repository</span><b class="mt-1 block" x-text="selectedRepo"></b></div><div><span class="muted">Branch</span><b class="mt-1 block" x-text="selectedBranch"></b></div><div><span class="muted">Artifact</span><b class="mt-1 block" x-text="selectedArtifactName"></b></div><div><span class="muted">Application URL</span><code class="mt-1 block break-all text-sm" x-text="selectedUrl"></code></div><div><span class="muted">Health URL</span><code class="mt-1 block break-all text-sm" x-text="selectedHealthUrl"></code><small class="mt-1 block text-slate-500">Health path: <code x-text="selectedHealthPath||'/'"></code></small></div><div><span class="muted">Deployment target</span><b class="mt-1 block" x-text="targetName(selectedTargetId)"></b></div><div><span class="muted">Public path</span><code class="mt-1 block text-xs" x-text="selectedPublicPath"></code></div><div><span class="muted">Private path</span><code class="mt-1 block text-xs" x-text="selectedPrivatePath"></code></div></div></div>
+          <div x-show="projectTab==='settings'" class="panel"><div class="flex flex-wrap items-center justify-between gap-3"><h2 class="font-bold">Application settings</h2><span class="pill" x-text="selected && selected.suspended ? 'Suspended' : 'Active'"></span></div>
+            <div x-show="canManageApps" class="mt-4 flex flex-wrap gap-2">
+              <button @click="openEdit()" class="btn" :disabled="busy"><i data-lucide="settings-2" class="h-4 w-4"></i>Edit configuration</button>
+              <button x-show="isAdmin && selected && !selected.suspended" @click="setProjectSuspended(true)" class="btn" :disabled="busy">Suspend deployments</button>
+              <button x-show="isAdmin && selected && selected.suspended" @click="setProjectSuspended(false)" class="btn" :disabled="busy">Reactivate</button>
+              <button x-show="isAdmin && selected && selected.suspended" @click="removeProject()" class="btn border-rose-200 text-rose-700" :disabled="busy">Remove from registry</button>
+            </div><p class="muted mt-3" x-show="selected && selected.suspended">Suspension blocks DigiOps deployments and rollback; the hosted website stays online. Registry removal preserves hosted files.</p><div class="mt-5 grid gap-4 md:grid-cols-2"><div><span class="muted">Repository</span><b class="mt-1 block" x-text="selectedRepo"></b></div><div><span class="muted">Branch</span><b class="mt-1 block" x-text="selectedBranch"></b></div><div><span class="muted">Artifact</span><b class="mt-1 block" x-text="selectedArtifactName"></b></div><div><span class="muted">Application URL</span><code class="mt-1 block break-all text-sm" x-text="selectedUrl"></code></div><div><span class="muted">Health URL</span><code class="mt-1 block break-all text-sm" x-text="selectedHealthUrl"></code><small class="mt-1 block text-slate-500">Health path: <code x-text="selectedHealthPath||'/'"></code></small></div><div><span class="muted">Deployment target</span><b class="mt-1 block" x-text="targetName(selectedTargetId)"></b></div><div><span class="muted">Public path</span><code class="mt-1 block text-xs" x-text="selectedPublicPath"></code></div><div><span class="muted">Private path</span><code class="mt-1 block text-xs" x-text="selectedPrivatePath"></code></div></div></div>
         </section>
 
         <section data-digiops-page="deployments" x-show="page==='deployments'" class="space-y-6">
@@ -1772,7 +1836,7 @@ document.querySelector('#app').innerHTML=`
 
   <div x-show="modal==='target'" class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" @click.outside="modal=null"><div class="flex items-center justify-between border-b border-slate-200 px-6 py-5"><div><h2 class="text-lg font-bold">Add deployment target</h2><p class="muted">Connect another Cloudways application or server through the signed DigiOps agent.</p></div><button @click="modal=null" class="icon-btn"><i data-lucide="x"></i></button></div><form @submit.prevent="saveTarget()" class="space-y-4 p-6"><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Target name</span><input x-model="targetForm.name" @input="syncTargetId()" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Target ID</span><input x-model="targetForm.id" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label></div><label class="block text-sm"><span class="mb-1.5 block font-semibold">Agent HTTPS endpoint</span><input x-model="targetForm.endpoint" placeholder="https://remote.example.com/digiops-agent.php" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="block text-sm"><span class="mb-1.5 block font-semibold">Shared secret</span><div class="flex gap-2"><input x-model="targetForm.secret" class="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2.5 font-mono text-xs" minlength="32" required><button type="button" @click="generateTargetSecret()" class="btn">Generate</button></div><small class="text-slate-500">Store the same secret as DIGIOPS_AGENT_SECRET on the remote application.</small></label><div class="flex justify-end gap-2"><button type="button" @click="modal=null" class="btn">Cancel</button><button class="btn btn-primary" :disabled="busy">Save target</button></div></form></div></div>
 
-  <div x-show="modal==='create'" class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" @click.outside="modal=null"><div class="flex items-center justify-between border-b border-slate-200 px-6 py-5"><div><h2 class="text-lg font-bold">Create application</h2><p class="muted">Map a repository to isolated Cloudways folders.</p></div><button @click="modal=null" class="icon-btn"><i data-lucide="x"></i></button></div><form @submit.prevent="saveProject()" class="space-y-4 p-6"><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Application name</span><input id="digiops-app-name" x-model="form.name" @input="slugify()" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Slug</span><input id="digiops-app-slug" x-model="form.slug" @input="syncSlug($event.target.value)" autocomplete="off" spellcheck="false" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label></div><label class="block text-sm"><span class="mb-1.5 block font-semibold">Repository</span><input x-model="form.repo" placeholder="owner/repository" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="block text-sm"><span class="mb-1.5 block font-semibold">Deployment target</span><select x-model="form.targetId" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"><template x-for="t in targets" :key="t.id"><option :value="t.id" x-text="t.name"></option></template></select></label><div x-show="form.targetId!=='local'" class="rounded-2xl border border-blue-100 bg-blue-50/50 p-4"><div class="grid gap-4"><label class="text-sm"><span class="mb-1.5 block font-semibold">Application URL</span><input x-model="form.url" placeholder="https://app.example.com/" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"></label><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Remote public path</span><input x-model="form.publicPath" placeholder="public_html/ or public_html/app/" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Remote private path</span><input x-model="form.privatePath" placeholder="private_html/ or private_html/app/" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"></label></div></div></div><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Branch</span><input x-model="form.branch" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Artifact name</span><input x-model="form.artifactName" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label></div><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Health path</span><input x-model="form.healthPath" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Keep releases</span><input x-model="form.retention" type="number" min="1" max="20" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label></div><div class="rounded-2xl bg-slate-50 p-4 text-sm"><b>Automatic paths</b><div id="digiops-public-path-preview" class="mt-2 font-mono text-xs text-slate-500">public_html/{slug}/</div><div id="digiops-private-path-preview" class="font-mono text-xs text-slate-500">private_html/{slug}/</div></div><div class="flex justify-end gap-2"><button type="button" @click="modal=null" class="btn">Cancel</button><button class="btn btn-primary" :disabled="busy">Create application</button></div></form></div></div>
+  <div x-show="modal==='create'" class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" @click.outside="modal=null"><div class="flex items-center justify-between border-b border-slate-200 px-6 py-5"><div><h2 class="text-lg font-bold" x-text="editProjectId?'Edit application':'Create application'"></h2><p class="muted">Configuration changes preserve deployment history. Application ID and local paths cannot be renamed here.</p></div><button @click="modal=null" class="icon-btn"><i data-lucide="x"></i></button></div><form @submit.prevent="saveProject()" class="space-y-4 p-6"><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Application name</span><input id="digiops-app-name" x-model="form.name" @input="if(!editProjectId)slugify()" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Slug</span><input id="digiops-app-slug" x-model="form.slug" :readonly="!!editProjectId" @input="if(!editProjectId)syncSlug($event.target.value)" autocomplete="off" spellcheck="false" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label></div><label class="block text-sm"><span class="mb-1.5 block font-semibold">Repository</span><input x-model="form.repo" placeholder="owner/repository" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="block text-sm"><span class="mb-1.5 block font-semibold">Deployment target</span><select x-model="form.targetId" :disabled="!!editProjectId" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"><template x-for="t in targets" :key="t.id"><option :value="t.id" x-text="t.name"></option></template></select></label><div x-show="form.targetId!=='local'" class="rounded-2xl border border-blue-100 bg-blue-50/50 p-4"><div class="grid gap-4"><label class="text-sm"><span class="mb-1.5 block font-semibold">Application URL</span><input x-model="form.url" placeholder="https://app.example.com/" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"></label><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Remote public path</span><input x-model="form.publicPath" placeholder="public_html/ or public_html/app/" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Remote private path</span><input x-model="form.privatePath" placeholder="private_html/ or private_html/app/" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"></label></div></div></div><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Branch</span><input x-model="form.branch" class="w-full rounded-xl border border-slate-200 px-3 py-2.5" required></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Artifact name</span><input x-model="form.artifactName" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label></div><div class="grid gap-4 md:grid-cols-2"><label class="text-sm"><span class="mb-1.5 block font-semibold">Health path</span><input x-model="form.healthPath" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label><label class="text-sm"><span class="mb-1.5 block font-semibold">Keep releases</span><input x-model="form.retention" type="number" min="1" max="20" class="w-full rounded-xl border border-slate-200 px-3 py-2.5"></label></div><div class="rounded-2xl bg-slate-50 p-4 text-sm"><b>Automatic paths</b><div id="digiops-public-path-preview" class="mt-2 font-mono text-xs text-slate-500">public_html/{slug}/</div><div id="digiops-private-path-preview" class="font-mono text-xs text-slate-500">private_html/{slug}/</div></div><div class="flex justify-end gap-2"><button type="button" @click="modal=null" class="btn">Cancel</button><button class="btn btn-primary" :disabled="busy" x-text="editProjectId?'Save changes':'Create application'"></button></div></form></div></div>
 </div>`
 
 Alpine.data('app',app)
