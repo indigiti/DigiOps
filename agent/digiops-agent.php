@@ -1,11 +1,122 @@
 <?php
 declare(strict_types=1);
+
+/**
+ * Exact-byte delta codec, shared by the controller and standalone agent.
+ * No filesystem paths or executable instructions are accepted from the patch.
+ */
+final class DigiOpsArtifactDelta {
+    public const MAX_BYTES=67108864;
+    private const MIN_CHUNK=16384;
+    private const MAX_BLOCK=131072;
+    private const MAX_HEADER=1048576;
+    private const MAX_CHUNKS=4096;
+
+    private static function read($fp,int $length): string {
+        $out='';
+        while(strlen($out)<$length){
+            $part=fread($fp,$length-strlen($out));
+            if($part===false||$part==='')throw new RuntimeException('DELTA_TRUNCATED');
+            $out.=$part;
+        }
+        return $out;
+    }
+    private static function write($fp,string $bytes): void {
+        $offset=0;$length=strlen($bytes);
+        while($offset<$length){
+            $n=fwrite($fp,substr($bytes,$offset));
+            if($n===false||$n===0)throw new RuntimeException('DELTA_WRITE_FAILED');
+            $offset+=$n;
+        }
+    }
+    public static function validSha(string $sha): bool { return preg_match('/^[a-f0-9]{64}$/D',$sha)===1; }
+    /** Content-anchored chunks let shifted ZIP entries resynchronize. */
+    public static function index(string $file): array {
+        $size=filesize($file);
+        if($size===false||$size<1||$size>self::MAX_BYTES)throw new RuntimeException('DELTA_SIZE_UNSUPPORTED');
+        $fp=fopen($file,'rb');if(!$fp)throw new RuntimeException('DELTA_READ_FAILED');
+        $chunks=[];$offset=0;
+        try{
+            while($offset<$size){
+                if(fseek($fp,$offset)!==0)throw new RuntimeException('DELTA_SEEK_FAILED');
+                $data=self::read($fp,min(self::MAX_BLOCK,$size-$offset));
+                $anchor=strlen($data)>self::MIN_CHUNK?strpos($data,"\xA5\x5A",self::MIN_CHUNK-2):false;
+                $length=$anchor===false?strlen($data):$anchor+2;
+                $chunks[]=['sha256'=>hash('sha256',substr($data,0,$length)),'bytes'=>$length,'offset'=>$offset];
+                $offset+=$length;
+                if(count($chunks)>self::MAX_CHUNKS)throw new RuntimeException('DELTA_TOO_MANY_CHUNKS');
+            }
+        }finally{fclose($fp);}
+        return $chunks;
+    }
+    public static function manifest(string $file): array {
+        $chunks=self::index($file);$hashes=[];
+        foreach($chunks as $chunk)$hashes[$chunk['sha256']]=$chunk['bytes'];
+        return ['sha256'=>hash_file('sha256',$file),'size'=>filesize($file),'chunks'=>$hashes];
+    }
+    /** Returns false when the base is unsuitable or the patch cannot save bytes. */
+    public static function create(string $target,array $base,string $patch): bool {
+        $baseSha=(string)($base['sha256']??'');$available=$base['chunks']??null;
+        if(!self::validSha($baseSha)||!is_array($available)||count($available)>self::MAX_CHUNKS)return false;
+        $chunks=self::index($target);$size=filesize($target);$sha=hash_file('sha256',$target);
+        $plan=[];$literalBytes=0;
+        foreach($chunks as $chunk){
+            $reuse=($available[$chunk['sha256']]??null)===$chunk['bytes'];
+            $plan[]=['sha256'=>$chunk['sha256'],'bytes'=>$chunk['bytes'],'reuse'=>$reuse];
+            if(!$reuse)$literalBytes+=$chunk['bytes'];
+        }
+        $header=json_encode(['schema'=>'DIGIOPS.DELTA/1','base'=>$baseSha,'target'=>$sha,'size'=>$size,'chunks'=>$plan],JSON_THROW_ON_ERROR);
+        if(strlen($header)>self::MAX_HEADER||4+strlen($header)+$literalBytes>=$size*0.95)return false;
+        $in=fopen($target,'rb');if(!$in)throw new RuntimeException('DELTA_READ_FAILED');
+        $out=fopen($patch,'wb');if(!$out){fclose($in);throw new RuntimeException('DELTA_WRITE_FAILED');}
+        try{
+            self::write($out,pack('N',strlen($header)).$header);
+            foreach($chunks as $i=>$chunk){
+                if($plan[$i]['reuse'])continue;
+                if(fseek($in,$chunk['offset'])!==0)throw new RuntimeException('DELTA_SEEK_FAILED');
+                self::write($out,self::read($in,$chunk['bytes']));
+            }
+        }finally{fclose($in);fclose($out);}
+        return true;
+    }
+    /** Reconstruct the byte-identical approved artifact before any publication. */
+    public static function reconstruct(string $base,string $patch,string $output,string $expectedBase,string $expectedSha,int $expectedSize): void {
+        if(!self::validSha($expectedBase)||!self::validSha($expectedSha)||$expectedSize<1||$expectedSize>self::MAX_BYTES)throw new RuntimeException('DELTA_TARGET_INVALID');
+        if(!is_file($base)||!hash_equals($expectedBase,(string)hash_file('sha256',$base)))throw new RuntimeException('DELTA_BASE_MISMATCH');
+        $index=[];foreach(self::index($base) as $chunk)$index[$chunk['sha256']]=$chunk;
+        $in=fopen($patch,'rb');$old=fopen($base,'rb');$out=fopen($output,'wb');
+        if(!$in||!$old||!$out){foreach([$in,$old,$out] as $fp)if(is_resource($fp))fclose($fp);@unlink($output);throw new RuntimeException('DELTA_OPEN_FAILED');}
+        $complete=false;
+        try{
+            $length=unpack('N',self::read($in,4))[1];
+            if($length<1||$length>self::MAX_HEADER)throw new RuntimeException('DELTA_HEADER_INVALID');
+            $header=json_decode(self::read($in,$length),true,32,JSON_THROW_ON_ERROR);
+            $plan=$header['chunks']??null;
+            if(($header['schema']??null)!=='DIGIOPS.DELTA/1'||($header['base']??null)!==$expectedBase||($header['target']??null)!==$expectedSha||($header['size']??null)!==$expectedSize||!is_array($plan)||!array_is_list($plan)||count($plan)<1||count($plan)>self::MAX_CHUNKS)throw new RuntimeException('DELTA_HEADER_MISMATCH');
+            $written=0;$hash=hash_init('sha256');
+            foreach($plan as $entry){
+                $sha=$entry['sha256']??null;$n=$entry['bytes']??null;$reuse=$entry['reuse']??null;
+                if(!is_string($sha)||!self::validSha($sha)||!is_int($n)||$n<1||$n>self::MAX_BLOCK||!is_bool($reuse)||$written+$n>$expectedSize)throw new RuntimeException('DELTA_CHUNK_INVALID');
+                if($reuse){
+                    $cached=$index[$sha]??null;
+                    if(!$cached||$cached['bytes']!==$n||fseek($old,$cached['offset'])!==0)throw new RuntimeException('DELTA_BASE_CHUNK_MISSING');
+                    $bytes=self::read($old,$n);
+                }else{$bytes=self::read($in,$n);}
+                if(!hash_equals($sha,hash('sha256',$bytes)))throw new RuntimeException('DELTA_CHUNK_HASH_MISMATCH');
+                self::write($out,$bytes);hash_update($hash,$bytes);$written+=$n;
+            }
+            if($written!==$expectedSize||fread($in,1)!==''||!hash_equals($expectedSha,hash_final($hash)))throw new RuntimeException('DELTA_TARGET_HASH_MISMATCH');
+            $complete=true;
+        }finally{fclose($in);fclose($old);fclose($out);if(!$complete)@unlink($output);}
+    }
+}
+if(defined('DIGIOPS_DELTA_LIBRARY_ONLY')&&DIGIOPS_DELTA_LIBRARY_ONLY)return;
 @set_time_limit(600);
 @ignore_user_abort(true);
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, private');
 header('X-Content-Type-Options: nosniff');
-const AGENT_VERSION='1.6.1';
+const AGENT_VERSION='1.7.0';
 const MAX_SKEW=300;
 const MAX_CHUNK=786432;
 function fail(string $error,int $status=400): never {
@@ -212,16 +323,49 @@ function publishRelease(array $payload,string $zipFile): array {
         removeTree($stage);return['release'=>$releaseId,'activation'=>$activation];
     } finally { flock($lock,LOCK_UN);fclose($lock); }
 }
+
+/** Cache only successfully deployed, verified archives; never read the live webroot. */
+function deltaBasePath(string $slug): string { return projectRuntime($slug).'/delta-cache/base.zip'; }
+function deltaBaseManifest(string $slug): array {
+    $base=deltaBasePath($slug);$meta=readJsonFile(dirname($base).'/meta.json',[]);
+    $current=readJsonFile(projectRuntime($slug).'/current.json',[]);
+    $sha=(string)($meta['sha256']??'');
+    if(!is_file($base)||!DigiOpsArtifactDelta::validSha($sha)||($meta['release']??null)!==($current['release']??null)||!hash_equals($sha,(string)hash_file('sha256',$base)))return [];
+    return DigiOpsArtifactDelta::manifest($base);
+}
+function cacheDeltaBase(string $slug,string $zip,array $result,string $expectedSha): void {
+    $size=filesize($zip);
+    if($size===false||$size<1||$size>DigiOpsArtifactDelta::MAX_BYTES||!DigiOpsArtifactDelta::validSha($expectedSha)||!hash_equals($expectedSha,(string)hash_file('sha256',$zip)))return;
+    $root=dirname(deltaBasePath($slug));
+    if(!is_dir($root)&&!@mkdir($root,0700,true)&&!is_dir($root))return;
+    $lock=@fopen($root.'/cache.lock','c+');if(!$lock)return;
+    try{
+        if(!flock($lock,LOCK_EX))return;
+        $current=readJsonFile(projectRuntime($slug).'/current.json',[]);
+        if(($current['release']??null)!==($result['release']??null))return;
+        $tmp=$root.'/base-'.bin2hex(random_bytes(6)).'.tmp';
+        if(!@copy($zip,$tmp)){@unlink($tmp);return;}
+        @chmod($tmp,0600);
+        if(!@rename($tmp,deltaBasePath($slug))){@unlink($tmp);return;}
+        $metaTemp=$root.'/meta-'.bin2hex(random_bytes(6)).'.tmp';
+        $encoded=json_encode(['sha256'=>$expectedSha,'release'=>$result['release']],JSON_THROW_ON_ERROR);
+        if(@file_put_contents($metaTemp,$encoded,LOCK_EX)===false){@unlink($metaTemp);return;}
+        @chmod($metaTemp,0600);
+        if(!@rename($metaTemp,$root.'/meta.json'))@unlink($metaTemp);
+    }finally{flock($lock,LOCK_UN);fclose($lock);}
+}
+
 $raw=(string)file_get_contents('php://input');verifySignature($raw);$data=json_decode($raw,true);if(!is_array($data))fail('INVALID_JSON');$action=(string)($data['action']??'');$payload=is_array($data['payload']??null)?$data['payload']:[];
 try{
-    if($action==='ping')ok(['agentVersion'=>AGENT_VERSION,'capabilities'=>['health','releases','deployment-status','deployment-request-id','atomic-switch-v1','runtime-activation-v1','runtime-activation-v2','files','deploy-chunked','rollback'],'runtime'=>['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip'),'runtimeActivation'=>runtimeActivationCapability()],'server'=>php_uname('n')]);
+    if($action==='ping')ok(['agentVersion'=>AGENT_VERSION,'capabilities'=>['health','releases','deployment-status','deployment-request-id','atomic-switch-v1','runtime-activation-v1','runtime-activation-v2','files','deploy-chunked','delta-transfer-v1','rollback'],'runtime'=>['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip'),'runtimeActivation'=>runtimeActivationCapability()],'server'=>php_uname('n')]);
     if($action==='health'){[$slug,$public,$private]=projectPaths($payload);$url=trim((string)($payload['url']??''));$healthPath=(string)($payload['healthPath']??'/');$http=['ok'=>false,'status'=>null,'ms'=>null];if($url!==''&&function_exists('curl_init')){$parts=parse_url($url);if(!filter_var($url,FILTER_VALIDATE_URL)||!is_array($parts)||strtolower((string)($parts['scheme']??''))!=='https'||empty($parts['host'])||isset($parts['user'])||isset($parts['pass']))fail('INVALID_HEALTH_URL');$probe=rtrim($url,'/').'/'.ltrim($healthPath,'/');$start=microtime(true);$ch=curl_init($probe);curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_NOBODY=>true,CURLOPT_FOLLOWLOCATION=>false,CURLOPT_MAXREDIRS=>0,CURLOPT_PROTOCOLS=>CURLPROTO_HTTPS,CURLOPT_REDIR_PROTOCOLS=>CURLPROTO_HTTPS,CURLOPT_TIMEOUT=>8,CURLOPT_CONNECTTIMEOUT=>4]);curl_exec($ch);$status=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);curl_close($ch);$http=['ok'=>$status>=200&&$status<400,'status'=>$status,'ms'=>(int)((microtime(true)-$start)*1000)];}$storage=['exists'=>is_dir($public),'bytes'=>dirSize($public),'writable'=>is_dir(dirname($public))&&is_writable(dirname($public))];$runtime=['php'=>PHP_VERSION,'curl'=>extension_loaded('curl'),'zip'=>extension_loaded('zip'),'sodium'=>extension_loaded('sodium')];ok(['url'=>$probe,'http'=>$http,'storage'=>$storage,'runtime'=>$runtime,'checkedAt'=>date(DATE_ATOM)]);}
     if($action==='releases'){$slug=safeSlug((string)($payload['project']??''));ok(['releases'=>listReleases($slug)]);}
     if($action==='deployment-status'){$slug=safeSlug((string)($payload['project']??''));$current=readJsonFile(projectRuntime($slug).'/current.json',[]);$deployment=deploymentState($slug);ok(['current'=>$current,'deployment'=>$deployment]);}
     if($action==='files'){[$slug,$public,$private]=projectPaths($payload);$scope=(string)($payload['scope']??'public');if(!in_array($scope,['public','private'],true))fail('INVALID_SCOPE');$root=$scope==='private'?$private:$public;$relative=trim(str_replace('\\','/',(string)($payload['path']??'')),'/');if(str_contains($relative,'..')||($relative!==''&&!preg_match('#^[A-Za-z0-9._/-]+$#',$relative)))fail('INVALID_PATH');$path=$relative===''?$root:$root.'/'.$relative;$rootReal=realpath($root)?:$root;$resolved=realpath($path);if($resolved!==false&&$resolved!==$rootReal&&!str_starts_with($resolved,$rootReal.'/'))fail('PATH_ESCAPE');$items=[];if(is_dir($path)){foreach(array_diff(scandir($path)?:[],['.','..']) as $name){if(str_starts_with($name,'.'))continue;$full=$path.'/'.$name;$items[]=['name'=>$name,'type'=>is_dir($full)?'dir':'file','size'=>is_file($full)?filesize($full):null,'modified'=>date(DATE_ATOM,filemtime($full)?:time())];}}ok(['listing'=>['path'=>$relative,'items'=>$items]]);}
+    if($action==='deploy-delta-base'){$slug=safeSlug((string)($payload['project']??''));ok(['base'=>deltaBaseManifest($slug)]);}
     if($action==='deploy-start'){$slug=safeSlug((string)($payload['project']??''));$size=(int)($payload['size']??0);if($size<1||$size>1024*1024*1024)fail('ARTIFACT_SIZE_INVALID');$existing=deploymentState($slug);if(deploymentStateIsActive($existing))fail('DEPLOYMENT_ALREADY_RUNNING',409);$id=bin2hex(random_bytes(12));$dir=projectRuntime($slug).'/incoming/'.$id;ensureDir($dir,0700);file_put_contents($dir.'/artifact.zip','');$meta=(array)($payload['meta']??[]);writeJsonFile($dir.'/meta.json',['project'=>$slug,'size'=>$size,'received'=>0,'sha256'=>(string)($payload['sha256']??''),'meta'=>$meta]);setDeploymentState($slug,'uploading','uploading',8,['commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??''),'artifactDigest'=>(string)($meta['artifactDigest']??''),'downloadSha256'=>(string)($meta['downloadSha256']??''),'requestId'=>(string)($meta['requestId']??''),'uploadId'=>$id,'received'=>0,'size'=>$size,'startedAt'=>date(DATE_ATOM)]);ok(['uploadId'=>$id,'chunkBytes'=>524288]);}
     if($action==='deploy-chunk'){$slug=safeSlug((string)($payload['project']??''));$id=(string)($payload['uploadId']??'');if(!preg_match('/^[a-f0-9]{24}$/',$id))fail('UPLOAD_ID_INVALID');$dir=projectRuntime($slug).'/incoming/'.$id;$meta=readJsonFile($dir.'/meta.json',[]);if(!$meta)fail('UPLOAD_NOT_FOUND',404);$offset=(int)($payload['offset']??-1);if($offset!==(int)($meta['received']??0))fail('UPLOAD_OFFSET_MISMATCH',409);$chunk=base64_decode((string)($payload['data']??''),true);if($chunk===false||$chunk==='')fail('CHUNK_INVALID');if(strlen($chunk)>MAX_CHUNK)fail('CHUNK_TOO_LARGE');$fp=fopen($dir.'/artifact.zip','ab');if(!$fp)fail('UPLOAD_WRITE_FAILED',500);$written=fwrite($fp,$chunk);fclose($fp);if($written!==strlen($chunk))fail('UPLOAD_WRITE_FAILED',500);$meta['received']=$offset+$written;writeJsonFile($dir.'/meta.json',$meta);$size=max(1,(int)($meta['size']??1));$pct=8+(int)floor(22*min(1,$meta['received']/$size));setDeploymentState($slug,'uploading','uploading',$pct,['uploadId'=>$id,'received'=>$meta['received'],'size'=>$size]);ok(['received'=>$meta['received']]);}
-    if($action==='deploy-commit'){$slug=safeSlug((string)($payload['project']??''));$id=(string)($payload['uploadId']??'');if(!preg_match('/^[a-f0-9]{24}$/',$id))fail('UPLOAD_ID_INVALID');$dir=projectRuntime($slug).'/incoming/'.$id;$upload=readJsonFile($dir.'/meta.json',[]);if(!$upload)fail('UPLOAD_NOT_FOUND',404);$zip=$dir.'/artifact.zip';if((int)($upload['received']??0)!==(int)($upload['size']??-1)||filesize($zip)!==(int)$upload['size'])fail('UPLOAD_INCOMPLETE');$expected=strtolower((string)($upload['sha256']??''));if($expected!==''&&!hash_equals($expected,strtolower(hash_file('sha256',$zip))))fail('ARTIFACT_HASH_MISMATCH');$meta=(array)($upload['meta']??[]);$meta['project']=$slug;$meta['uploadId']=$id;$meta['publicPath']=$payload['publicPath']??('public_html/'.$slug);$meta['privatePath']=$payload['privatePath']??('private_html/'.$slug);$GLOBALS['DIGIOPS_ACTIVE_DEPLOYMENT']=['slug'=>$slug,'commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??''),'artifactDigest'=>(string)($meta['artifactDigest']??''),'downloadSha256'=>(string)($meta['downloadSha256']??''),'requestId'=>(string)($meta['requestId']??''),'uploadId'=>$id];try{$result=publishRelease($meta,$zip);$GLOBALS['DIGIOPS_ACTIVE_DEPLOYMENT']=null;removeTree($dir);ok($result);}catch(Throwable $e){setDeploymentState($slug,'failed','failed',100,['commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??''),'requestId'=>(string)($meta['requestId']??''),'uploadId'=>$id,'error'=>$e->getMessage()]);$GLOBALS['DIGIOPS_ACTIVE_DEPLOYMENT']=null;throw $e;}}
+    if($action==='deploy-commit'){$slug=safeSlug((string)($payload['project']??''));$id=(string)($payload['uploadId']??'');if(!preg_match('/^[a-f0-9]{24}$/',$id))fail('UPLOAD_ID_INVALID');$dir=projectRuntime($slug).'/incoming/'.$id;$upload=readJsonFile($dir.'/meta.json',[]);if(!$upload)fail('UPLOAD_NOT_FOUND',404);$zip=$dir.'/artifact.zip';if((int)($upload['received']??0)!==(int)($upload['size']??-1)||filesize($zip)!==(int)$upload['size'])fail('UPLOAD_INCOMPLETE');$expected=strtolower((string)($upload['sha256']??''));if($expected!==''&&!hash_equals($expected,strtolower(hash_file('sha256',$zip))))fail('ARTIFACT_HASH_MISMATCH');$meta=(array)($upload['meta']??[]);$meta['project']=$slug;$meta['uploadId']=$id;$meta['publicPath']=$payload['publicPath']??('public_html/'.$slug);$meta['privatePath']=$payload['privatePath']??('private_html/'.$slug);$GLOBALS['DIGIOPS_ACTIVE_DEPLOYMENT']=['slug'=>$slug,'commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??''),'artifactDigest'=>(string)($meta['artifactDigest']??''),'downloadSha256'=>(string)($meta['downloadSha256']??''),'requestId'=>(string)($meta['requestId']??''),'uploadId'=>$id];try{$transferBytes=filesize($zip);$delta=$meta['delta']??null;if(is_array($delta)){$expectedTarget=(string)($meta['downloadSha256']??'');if(!hash_equals($expectedTarget,(string)($delta['targetSha']??'')))throw new RuntimeException('DELTA_APPROVED_DIGEST_MISMATCH');$base=deltaBaseManifest($slug);$baseSha=(string)($delta['baseSha']??'');if(!hash_equals($baseSha,(string)($base['sha256']??'')))throw new RuntimeException('DELTA_BASE_MISMATCH');$reconstructed=$dir.'/reconstructed.zip';DigiOpsArtifactDelta::reconstruct(deltaBasePath($slug),$zip,$reconstructed,$baseSha,$expectedTarget,(int)($delta['targetSize']??0));$zip=$reconstructed;}elseif(($meta['deltaEligible']??false)===true&&!hash_equals((string)($meta['downloadSha256']??''),(string)hash_file('sha256',$zip)))throw new RuntimeException('ARTIFACT_HASH_MISMATCH');$result=publishRelease($meta,$zip);$GLOBALS['DIGIOPS_ACTIVE_DEPLOYMENT']=null;if(($meta['deltaEligible']??false)===true){try{cacheDeltaBase($slug,$zip,$result,(string)($meta['downloadSha256']??''));}catch(Throwable){/* successful publication must not fail due to an optional cache */}}$result['transfer']=['mode'=>is_array($delta)?'delta':'full','bytes'=>$transferBytes,'fullBytes'=>filesize($zip)];removeTree($dir);ok($result);}catch(Throwable $e){setDeploymentState($slug,'failed','failed',100,['commit'=>(string)($meta['commit']??''),'artifactId'=>(string)($meta['artifactId']??''),'requestId'=>(string)($meta['requestId']??''),'uploadId'=>$id,'error'=>$e->getMessage()]);$GLOBALS['DIGIOPS_ACTIVE_DEPLOYMENT']=null;throw $e;}}
     if($action==='rollback'){
         [$slug,$publicTarget,$privateTarget]=projectPaths($payload);
         $release=(string)($payload['release']??'');
