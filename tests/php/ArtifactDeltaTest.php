@@ -2,6 +2,7 @@
 declare(strict_types=1);
 define('DIGIOPS_DELTA_LIBRARY_ONLY',true);
 require dirname(__DIR__,2).'/agent/digiops-agent.php';
+if(function_exists('fail')||function_exists('publishRelease')||defined('AGENT_VERSION'))throw new RuntimeException('AGENT_LIBRARY_MODE_LEAK');
 
 function expectDelta(bool $ok,string $message):void{if(!$ok)throw new RuntimeException($message);}
 function expectDeltaError(callable $fn,string $message):void{

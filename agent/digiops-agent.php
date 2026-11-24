@@ -119,6 +119,8 @@ header('X-Content-Type-Options: nosniff');
 const AGENT_VERSION='1.7.0';
 const MAX_SKEW=300;
 const MAX_CHUNK=786432;
+// Conditional declarations keep agent HTTP handlers out of codec-only imports.
+if (!defined('DIGIOPS_DELTA_LIBRARY_ONLY') || !DIGIOPS_DELTA_LIBRARY_ONLY) {
 function fail(string $error,int $status=400): never {
     $active=$GLOBALS['DIGIOPS_ACTIVE_DEPLOYMENT']??null;
     if(is_array($active) && empty($GLOBALS['DIGIOPS_MARKING_DEPLOY_FAILURE']) && function_exists('setDeploymentState')){
@@ -386,3 +388,5 @@ try{
     }
     fail('UNKNOWN_ACTION',404);
 }catch(Throwable $e){ fail($e->getMessage(),400); }
+
+}

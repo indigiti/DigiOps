@@ -23,7 +23,7 @@ final class RemoteDeploymentDriver
         $eligible=strtolower($projectId)==='qnext' && $size<=67108864 && hash_equals((string)($meta['downloadSha256']??''),$sha);
         try {
             // Read-only negotiation; old agents and unavailable bases use full ZIP.
-            if($eligible){
+            if($eligible && ($meta['forceFull']??false)!==true){
                 try{
                     $ping=$this->targets->remoteRequest($projectId,'ping',[]);
                     if(in_array('delta-transfer-v1',(array)($ping['capabilities']??[]),true)){

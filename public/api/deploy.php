@@ -197,6 +197,7 @@ try {
                 'artifactDigest'=>$artifactDigest,
                 'downloadSha256'=>$downloadSha,
                 'requestId'=>$requestId,
+                'forceFull'=>($data['forceFull']??false)===true,
             ]);
             (new ProjectRegistry())->patchRuntime($projectId,[
                 'status'=>'deployed',
