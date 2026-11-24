@@ -214,6 +214,7 @@ try {
                 'artifactId'=>$artifactId,
                 'artifactDigest'=>$artifactDigest,
                 'requestId'=>$requestId,
+                'transfer'=>$result['transfer']??null,
             ],$user);
         }
     } finally {
@@ -227,6 +228,7 @@ try {
         'release'=>(string)($result['release']??''),
         'completedAt'=>date(DATE_ATOM),
         'verificationSource'=>(($target['id']??'local')==='local'?'local-target':'remote-target'),
+        'transfer'=>$result['transfer']??null,
     ]);
     JsonResponse::send(['requestId'=>$requestId]+$result);
 } catch (Throwable $e) {
