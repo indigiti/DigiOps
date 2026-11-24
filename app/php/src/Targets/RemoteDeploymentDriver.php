@@ -16,24 +16,56 @@ final class RemoteDeploymentDriver
         if($size===false) throw new RuntimeException('ARTIFACT_SIZE_FAILED');
         $sha=hash_file('sha256',$zip);
         $requiresRuntimeActivation=self::artifactRequiresRuntimeActivation($zip);
+        $fullSize=$size;
+        $transfer=$zip;
+        $patch=null;
+        $delta=null;
+        $eligible=strtolower($projectId)==='qnext' && $size<=67108864 && hash_equals((string)($meta['downloadSha256']??''),$sha);
+        try {
+            // Read-only negotiation; old agents and unavailable bases use full ZIP.
+            if($eligible){
+                try{
+                    $ping=$this->targets->remoteRequest($projectId,'ping',[]);
+                    if(in_array('delta-transfer-v1',(array)($ping['capabilities']??[]),true)){
+                        if(!class_exists('DigiOpsArtifactDelta',false)){
+                            if(!defined('DIGIOPS_DELTA_LIBRARY_ONLY'))define('DIGIOPS_DELTA_LIBRARY_ONLY',true);
+                            require_once DIGIOPS_SOURCE_ROOT.'/agent/digiops-agent.php';
+                        }
+                        $base=$this->targets->remoteRequest($projectId,'deploy-delta-base',['project'=>$projectId]);
+                        $base=$base['base']??[];
+                        if(is_array($base)&&$base){
+                            $patch=tempnam(sys_get_temp_dir(),'digiops-delta-');
+                            if($patch!==false && \DigiOpsArtifactDelta::create($zip,$base,$patch)){
+                                $patchSize=filesize($patch);
+                                if($patchSize!==false && $patchSize>0 && $patchSize<$fullSize){
+                                    $delta=['baseSha'=>$base['sha256'],'targetSha'=>$sha,'targetSize'=>$fullSize];
+                                    $transfer=$patch;$size=$patchSize;
+                                }
+                            }
+                        }
+                    }
+                }catch(\Throwable){/* fallback is safe only before deploy-start */}
+            }
 
         $start=$this->targets->remoteRequest($projectId,'deploy-start',[
             'project'=>$projectId,
             'size'=>$size,
-            'sha256'=>$sha,
+            'sha256'=>hash_file('sha256',$transfer),
             'meta'=>[
                 'commit'=>(string)($meta['commit']??''),
                 'artifactId'=>(string)($meta['artifactId']??''),
                 'artifactDigest'=>(string)($meta['artifactDigest']??''),
                 'downloadSha256'=>(string)($meta['downloadSha256']??''),
                 'requestId'=>(string)($meta['requestId']??''),
+                'deltaEligible'=>$eligible,
+                ...($delta===null?[]:['delta'=>$delta]),
             ],
         ]);
         $uploadId=(string)($start['uploadId']??'');
         $chunkBytes=max(65536,min(524288,(int)($start['chunkBytes']??524288)));
         if($uploadId==='') throw new RuntimeException('REMOTE_UPLOAD_START_FAILED');
 
-        $fp=fopen($zip,'rb');
+        $fp=fopen($transfer,'rb');
         if(!$fp) throw new RuntimeException('ARTIFACT_READ_FAILED');
         $offset=0;
         try{
@@ -47,7 +79,9 @@ final class RemoteDeploymentDriver
                     'offset'=>$offset,
                     'data'=>base64_encode($chunk),
                 ]);
-                $offset=(int)($result['received']??($offset+strlen($chunk)));
+                $received=(int)($result['received']??-1);
+                if($received!==$offset+strlen($chunk))throw new RuntimeException('REMOTE_UPLOAD_OFFSET_MISMATCH');
+                $offset=$received;
             }
         } finally {
             fclose($fp);
@@ -71,6 +105,7 @@ final class RemoteDeploymentDriver
                     throw new RuntimeException('REMOTE_RUNNING_COMMIT_MISMATCH');
                 }
             }
+            $result['transfer']=$result['transfer']??['mode'=>$delta===null?'full':'delta','bytes'=>$size,'fullBytes'=>$fullSize];
             return $result;
         } catch (RuntimeException $e) {
             $message=$e->getMessage();
@@ -78,6 +113,9 @@ final class RemoteDeploymentDriver
                 throw new RuntimeException('REMOTE_COMMIT_UNCERTAIN_'.$message, 0, $e);
             }
             throw $e;
+        }
+        } finally {
+            if(is_string($patch))@unlink($patch);
         }
     }
 
